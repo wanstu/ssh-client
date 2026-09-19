@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"github.com/wanstu/ssh-client/internal/config"
@@ -19,9 +21,23 @@ import (
 	"github.com/wanstu/wails-desktop-kit/secureconfig"
 )
 
+const (
+	commandHistorySecureKey = "command-history-v1"
+	commandHistoryLimit     = 1000
+)
+
+type CommandHistoryEntry struct {
+	Command   string `json:"command"`
+	SessionID string `json:"session_id,omitempty"`
+	Target    string `json:"target,omitempty"`
+	CreatedAt int64  `json:"created_at"`
+}
+
 type UIState struct {
 	Settings               model.Settings              `json:"settings"`
 	Sessions               []sshclient.SessionSnapshot `json:"sessions"`
+	CommandHistory         []CommandHistoryEntry       `json:"command_history"`
+	CommandHistoryError    string                      `json:"command_history_error,omitempty"`
 	LaunchAtLoginSupported bool                        `json:"launch_at_login_supported"`
 	LaunchAtLogin          bool                        `json:"launch_at_login"`
 	DataDir                string                      `json:"data_dir"`
@@ -56,6 +72,8 @@ type App struct {
 
 	credentialMu      sync.Mutex
 	pendingCredential map[string]pendingCredentialAction
+
+	commandHistoryMu sync.Mutex
 }
 
 func NewApp() (*App, error) {
@@ -195,13 +213,92 @@ func (a *App) GetState() (UIState, error) {
 	if err != nil {
 		return UIState{}, err
 	}
-	return UIState{
+
+	commandHistory, historyErr := a.GetCommandHistory()
+	state := UIState{
 		Settings:               settings,
 		Sessions:               a.sessions.Sessions(),
+		CommandHistory:         commandHistory,
 		LaunchAtLoginSupported: a.launchAtLogin.Supported(),
 		LaunchAtLogin:          enabled,
 		DataDir:                a.store.Dir(),
-	}, nil
+	}
+	if historyErr != nil {
+		state.CommandHistoryError = historyErr.Error()
+	}
+	return state, nil
+}
+
+func (a *App) GetCommandHistory() ([]CommandHistoryEntry, error) {
+	a.commandHistoryMu.Lock()
+	defer a.commandHistoryMu.Unlock()
+	return a.loadCommandHistoryLocked()
+}
+
+func (a *App) RecordCommandHistory(entry CommandHistoryEntry) ([]CommandHistoryEntry, error) {
+	entry.Command = strings.TrimSpace(entry.Command)
+	entry.SessionID = strings.TrimSpace(entry.SessionID)
+	entry.Target = strings.TrimSpace(entry.Target)
+	if entry.Command == "" {
+		return nil, errors.New("命令不能为空")
+	}
+	if len(entry.Command) > 64*1024 {
+		return nil, errors.New("命令过长，不能写入历史记录")
+	}
+	if entry.CreatedAt <= 0 {
+		entry.CreatedAt = time.Now().UnixMilli()
+	}
+
+	a.commandHistoryMu.Lock()
+	defer a.commandHistoryMu.Unlock()
+
+	history, err := a.loadCommandHistoryLocked()
+	if err != nil {
+		return nil, err
+	}
+	history = append(history, entry)
+	sort.SliceStable(history, func(i, j int) bool {
+		return history[i].CreatedAt > history[j].CreatedAt
+	})
+	if len(history) > commandHistoryLimit {
+		history = history[:commandHistoryLimit]
+	}
+	if err := a.secure.SaveJSON(commandHistorySecureKey, history); err != nil {
+		return nil, fmt.Errorf("保存加密命令历史失败: %w", err)
+	}
+	return history, nil
+}
+
+func (a *App) ClearCommandHistory() error {
+	a.commandHistoryMu.Lock()
+	defer a.commandHistoryMu.Unlock()
+
+	err := a.secure.Delete(commandHistorySecureKey)
+	if errors.Is(err, secureconfig.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("清空加密命令历史失败: %w", err)
+	}
+	return nil
+}
+
+func (a *App) loadCommandHistoryLocked() ([]CommandHistoryEntry, error) {
+	var history []CommandHistoryEntry
+	if err := a.secure.LoadJSON(commandHistorySecureKey, &history); err != nil {
+		if errors.Is(err, secureconfig.ErrNotFound) {
+			return []CommandHistoryEntry{}, nil
+		}
+		return nil, fmt.Errorf("读取加密命令历史失败: %w", err)
+	}
+
+	sort.SliceStable(history, func(i, j int) bool {
+		return history[i].CreatedAt > history[j].CreatedAt
+	})
+	if len(history) > commandHistoryLimit {
+		history = history[:commandHistoryLimit]
+	}
+	return history, nil
 }
 
 func (a *App) SetLaunchAtLogin(value bool) (UIState, error) {

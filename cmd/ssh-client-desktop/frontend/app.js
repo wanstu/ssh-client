@@ -20,9 +20,11 @@ import {
   ChoosePrivateKey,
   PreviewSSHConfig,
   ChooseSSHConfig,
-  ImportSSHConfig
+  ImportSSHConfig,
+  RecordCommandHistory,
+  ClearCommandHistory
 } from "./wailsjs/go/main/App.js";
-import { EventsOn } from "./wailsjs/runtime/runtime.js";
+import { ClipboardGetText, ClipboardSetText, EventsOn } from "./wailsjs/runtime/runtime.js";
 
 const $ = (selector) => document.querySelector(selector);
 const BUILTIN_THEME_PACKS = [
@@ -31,6 +33,10 @@ const BUILTIN_THEME_PACKS = [
   { name: "forest", display_name: "森林", description: "绿色系，柔和自然" },
   { name: "sunset", display_name: "落日", description: "橙粉暖色，更有生活感" }
 ];
+
+const SESSION_HISTORY_KEY = "ssh-client.session-history.v1";
+const SESSION_HISTORY_LIMIT = 50;
+const SESSION_HISTORY_TEXT_LIMIT = 200000;
 
 const state = {
   settings: { theme: { mode: "dark", variant: "aurora" }, groups: [], profiles: [] },
@@ -49,7 +55,14 @@ const state = {
   launchAtLogin: false,
   launchAtLoginSupported: false,
   dataDir: "",
-  search: ""
+  search: "",
+  sidebarCollapsed: false,
+  terminalContextSelection: "",
+  history: [],
+  commandHistory: [],
+  commandDrafts: new Map(),
+  commandDraftRecordable: new Map(),
+  commandHistoryCursor: new Map()
 };
 
 const decoder = new TextDecoder("utf-8");
@@ -70,6 +83,7 @@ class TerminalBuffer {
     this.savedCol = 0;
     this.mode = "normal";
     this.sequence = "";
+    this.bracketedPaste = false;
   }
 
   blankRow(cols = this.cols) {
@@ -162,9 +176,15 @@ class TerminalBuffer {
   }
 
   handleCSI(raw, final) {
+    const privateMode = raw.startsWith("?");
     const clean = raw.replace(/^\?/, "");
     const params = clean === "" ? [] : clean.split(";").map((value) => Number(value || 0));
     const first = params[0] || 0;
+
+    if (privateMode && params.includes(2004) && (final === "h" || final === "l")) {
+      this.bracketedPaste = final === "h";
+      return;
+    }
 
     switch (final) {
       case "A":
@@ -275,6 +295,21 @@ class TerminalBuffer {
     }
   }
 
+  loadText(text) {
+    const lines = String(text || "").replace(/\r/g, "").split("\n");
+    this.screen = Array.from({ length: this.rows }, () => this.blankRow());
+    this.scrollback = [];
+    const visible = lines.slice(-this.rows);
+    const earlier = lines.slice(0, Math.max(0, lines.length - this.rows));
+    this.scrollback = earlier.slice(-this.scrollbackLimit);
+    for (let r = 0; r < visible.length; r++) {
+      const chars = Array.from(visible[r]).slice(0, this.cols);
+      for (let c = 0; c < chars.length; c++) this.screen[r][c] = chars[c];
+    }
+    this.row = Math.max(0, Math.min(visible.length - 1, this.rows - 1));
+    this.col = Math.min(this.cols - 1, Array.from(visible[this.row] || "").length);
+  }
+
   render(cursorVisible) {
     const screenLines = this.screen.map((row) => row.join("").replace(/\s+$/, ""));
     if (cursorVisible) {
@@ -306,6 +341,330 @@ function showToast(message) {
   toast.classList.add("is-visible");
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => toast.classList.remove("is-visible"), 2200);
+}
+
+function loadSessionHistory() {
+  try {
+    const raw = window.localStorage.getItem(SESSION_HISTORY_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    state.history = Array.isArray(parsed)
+      ? parsed.slice(0, SESSION_HISTORY_LIMIT).map((item) => ({
+          history_id: String(item.history_id || ""),
+          original_session_id: String(item.original_session_id || ""),
+          profile_id: String(item.profile_id || ""),
+          name: String(item.name || "SSH 会话"),
+          target: String(item.target || ""),
+          closed_at: Number(item.closed_at || Date.now()),
+          terminal_text: ""
+        })).filter((item) => item.history_id)
+      : [];
+  } catch (_) {
+    state.history = [];
+  }
+}
+
+function persistSessionHistory() {
+  const payload = state.history.slice(0, SESSION_HISTORY_LIMIT).map((item) => ({
+    history_id: item.history_id,
+    original_session_id: item.original_session_id,
+    profile_id: item.profile_id || "",
+    name: item.name,
+    target: item.target,
+    closed_at: item.closed_at
+  }));
+  try {
+    window.localStorage.setItem(SESSION_HISTORY_KEY, JSON.stringify(payload));
+  } catch (_) {}
+}
+
+function formatHistoryTime(value) {
+  const date = new Date(Number(value || 0));
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function rememberClosedSession(session, terminalText) {
+  const record = {
+    history_id: String(session.id) + "-" + Date.now(),
+    original_session_id: String(session.id),
+    profile_id: session.profile_id || "",
+    name: session.name || "SSH 会话",
+    target: session.target || "",
+    closed_at: Date.now(),
+    terminal_text: String(terminalText || "").slice(-SESSION_HISTORY_TEXT_LIMIT)
+  };
+  state.history.unshift(record);
+  state.history = state.history.slice(0, SESSION_HISTORY_LIMIT);
+  persistSessionHistory();
+  if (state.nav === "history") renderSidebar();
+  return record;
+}
+
+function clearSessionHistory() {
+  state.history = [];
+  persistSessionHistory();
+  renderSidebar();
+}
+
+function restoreHistorySession(record) {
+  const restoredId = "history:" + record.history_id;
+  const existing = state.sessions.find((item) => item.id === restoredId);
+  if (existing) {
+    selectSession(restoredId);
+    return;
+  }
+
+  state.sessions.push({
+    id: restoredId,
+    profile_id: record.profile_id || "",
+    name: record.name,
+    target: record.target,
+    state: "disconnected",
+    stage: "历史记录",
+    message: "这是已关闭会话的历史记录，不会恢复远端 SSH 连接。",
+    history_only: true,
+    history_id: record.history_id
+  });
+
+  const terminal = terminalFor(restoredId);
+  if (record.terminal_text) {
+    terminal.loadText(record.terminal_text);
+  } else {
+    terminal.loadText(
+      "该历史记录来自之前的应用运行。为避免在本机长期保存终端内容，只保留了会话信息。"
+    );
+  }
+  state.activeSessionId = restoredId;
+  renderAll();
+  window.setTimeout(() => $("#terminalViewport").focus(), 0);
+}
+
+const SIDEBAR_DEFAULT_WIDTH = 310;
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_MAX_WIDTH = 600;
+let sidebarResizeFrame = 0;
+
+function sidebarWidthBounds() {
+  const shell = $(".app-shell");
+  const rail = $(".rail");
+  const railWidth = rail.getBoundingClientRect().width;
+  const available = Math.max(SIDEBAR_MIN_WIDTH, shell.clientWidth - railWidth - 420);
+  return {
+    min: SIDEBAR_MIN_WIDTH,
+    max: Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, available))
+  };
+}
+
+function scheduleSidebarTerminalResize() {
+  if (sidebarResizeFrame) return;
+  sidebarResizeFrame = window.requestAnimationFrame(() => {
+    sidebarResizeFrame = 0;
+    resizeActiveTerminal();
+  });
+}
+
+function applySidebarWidth(width, persist = true) {
+  const bounds = sidebarWidthBounds();
+  const next = Math.round(Math.max(bounds.min, Math.min(bounds.max, Number(width) || SIDEBAR_DEFAULT_WIDTH)));
+  const shell = $(".app-shell");
+  const handle = $("#sidebarResizeHandle");
+  shell.style.setProperty("--ssh-sidebar-width", next + "px");
+  handle.setAttribute("aria-valuemin", String(bounds.min));
+  handle.setAttribute("aria-valuemax", String(bounds.max));
+  handle.setAttribute("aria-valuenow", String(next));
+  handle.title = "侧边栏宽度 " + next + "px；拖动调整，双击恢复默认";
+  if (persist) window.localStorage.setItem("ssh-client.sidebar-width", String(next));
+  scheduleSidebarTerminalResize();
+  return next;
+}
+
+function bindSidebarResize() {
+  const shell = $(".app-shell");
+  const handle = $("#sidebarResizeHandle");
+  const rail = $(".rail");
+  let dragging = false;
+
+  const widthFromPointer = (clientX) => clientX - rail.getBoundingClientRect().right;
+
+  const finish = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    shell.classList.remove("is-sidebar-resizing");
+    if (event && handle.hasPointerCapture(event.pointerId)) {
+      handle.releasePointerCapture(event.pointerId);
+    }
+    scheduleSidebarTerminalResize();
+  };
+
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || state.sidebarCollapsed) return;
+    event.preventDefault();
+    dragging = true;
+    shell.classList.add("is-sidebar-resizing");
+    handle.setPointerCapture(event.pointerId);
+    applySidebarWidth(widthFromPointer(event.clientX));
+  });
+
+  handle.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    event.preventDefault();
+    applySidebarWidth(widthFromPointer(event.clientX));
+  });
+
+  handle.addEventListener("pointerup", finish);
+  handle.addEventListener("pointercancel", finish);
+
+  handle.addEventListener("dblclick", () => {
+    applySidebarWidth(SIDEBAR_DEFAULT_WIDTH);
+  });
+
+  handle.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) return;
+    event.preventDefault();
+    if (event.key === "Home") {
+      applySidebarWidth(SIDEBAR_DEFAULT_WIDTH);
+      return;
+    }
+    const current = Number.parseInt(getComputedStyle(shell).getPropertyValue("--ssh-sidebar-width"), 10) || SIDEBAR_DEFAULT_WIDTH;
+    applySidebarWidth(current + (event.key === "ArrowLeft" ? -10 : 10));
+  });
+
+  window.addEventListener("resize", () => {
+    const current = Number.parseInt(getComputedStyle(shell).getPropertyValue("--ssh-sidebar-width"), 10) || SIDEBAR_DEFAULT_WIDTH;
+    applySidebarWidth(current, false);
+  });
+}
+
+function applySidebarCollapsed(collapsed, persist = true) {
+  state.sidebarCollapsed = !!collapsed;
+  const shell = $(".app-shell");
+  const button = $("#sidebarToggleButton");
+  shell.classList.toggle("is-sidebar-collapsed", state.sidebarCollapsed);
+  button.setAttribute("aria-pressed", String(state.sidebarCollapsed));
+  button.setAttribute("aria-label", state.sidebarCollapsed ? "展开连接侧边栏" : "折叠连接侧边栏");
+  button.title = state.sidebarCollapsed ? "展开连接侧边栏" : "折叠连接侧边栏";
+  button.textContent = state.sidebarCollapsed ? "☰" : "◧";
+  if (persist) {
+    window.localStorage.setItem("ssh-client.sidebar-collapsed", state.sidebarCollapsed ? "1" : "0");
+  }
+  scheduleSidebarTerminalResize();
+}
+
+function terminalSelectionText() {
+  const selection = window.getSelection();
+  const viewport = $("#terminalViewport");
+  if (!selection || selection.isCollapsed || !selection.anchorNode || !selection.focusNode) return "";
+  if (!viewport.contains(selection.anchorNode) || !viewport.contains(selection.focusNode)) return "";
+  return selection.toString();
+}
+
+async function writeClipboardText(text) {
+  if (!text) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (_) {
+    try {
+      return !!(await ClipboardSetText(text));
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
+async function readClipboardText() {
+  try {
+    return await navigator.clipboard.readText();
+  } catch (_) {
+    try {
+      return await ClipboardGetText();
+    } catch (_) {
+      return "";
+    }
+  }
+}
+
+async function copyTerminalSelection(text = terminalSelectionText()) {
+  if (!text) {
+    showToast("请先选择终端中的文本");
+    return;
+  }
+  if (await writeClipboardText(text)) {
+    showToast("已复制终端文本");
+  } else {
+    showToast("复制失败");
+  }
+}
+
+function normalizePasteText(text) {
+  return String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function trackPastedDraft(text) {
+  const session = activeSession();
+  if (!session || session.history_only || !text) return;
+  const current = state.commandDrafts.get(session.id) || "";
+  if (!current) {
+    state.commandDraftRecordable.set(session.id, looksLikeCommandPrompt(session));
+  }
+  state.commandDrafts.set(session.id, current + text);
+  state.commandHistoryCursor.set(session.id, -1);
+}
+
+async function sendTerminalPaste(text) {
+  const session = activeSession();
+  if (!session || session.state !== "connected") return;
+  const normalized = normalizePasteText(text);
+  if (!normalized) return;
+
+  trackPastedDraft(normalized);
+
+  const terminal = terminalFor(session.id);
+  const payload = terminal.bracketedPaste
+    ? "\u001b[200~" + normalized + "\u001b[201~"
+    : normalized;
+  await sendTerminalData(payload);
+}
+
+async function pasteTerminalClipboard() {
+  const text = await readClipboardText();
+  if (!text) return;
+  await sendTerminalPaste(text);
+  $("#terminalViewport").focus();
+}
+
+function selectAllTerminalText() {
+  const text = $("#terminalText");
+  if (!text.textContent) return;
+  const range = document.createRange();
+  range.selectNodeContents(text);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function hideTerminalContextMenu() {
+  $("#terminalContextMenu").classList.add("is-hidden");
+}
+
+function showTerminalContextMenu(event) {
+  const menu = $("#terminalContextMenu");
+  state.terminalContextSelection = terminalSelectionText();
+  const copyButton = menu.querySelector('[data-terminal-action="copy"]');
+  copyButton.disabled = !state.terminalContextSelection;
+  menu.classList.remove("is-hidden");
+
+  const width = menu.offsetWidth;
+  const height = menu.offsetHeight;
+  const left = Math.min(event.clientX, Math.max(8, window.innerWidth - width - 8));
+  const top = Math.min(event.clientY, Math.max(8, window.innerHeight - height - 8));
+  menu.style.left = left + "px";
+  menu.style.top = top + "px";
 }
 
 function buildCommandItems() {
@@ -531,6 +890,7 @@ async function loadState() {
   const next = await GetState();
   state.settings = next.settings;
   state.sessions = next.sessions || [];
+  state.commandHistory = next.command_history || [];
   state.launchAtLogin = !!next.launch_at_login;
   state.launchAtLoginSupported = !!next.launch_at_login_supported;
   state.dataDir = next.data_dir || "";
@@ -540,6 +900,9 @@ async function loadState() {
   await loadThemeCatalog(false);
   await applyTheme();
   renderAll();
+  if (next.command_history_error) {
+    showToast(next.command_history_error);
+  }
 }
 
 function renderAll() {
@@ -552,12 +915,32 @@ function renderSidebar() {
   const title = $("#sidebarTitle");
   const meta = $("#sidebarMeta");
   const list = $("#connectionList");
+  const search = $("#connectionSearch");
   list.replaceChildren();
+
+  search.placeholder = state.nav === "history"
+    ? "搜索命令或目标主机"
+    : "搜索名称、地址、用户或标签";
 
   if (state.nav === "sessions") {
     title.textContent = "会话";
     meta.textContent = String(state.sessions.length) + " 个标签";
     renderSessionSidebar(list);
+    return;
+  }
+
+  if (state.nav === "history") {
+    const query = state.search.trim().toLowerCase();
+    const filtered = state.commandHistory.filter((record) => {
+      if (!query) return true;
+      return [record.command, record.target].filter(Boolean).join(" ").toLowerCase().includes(query);
+    });
+
+    title.textContent = "命令历史";
+    meta.textContent = query
+      ? String(filtered.length) + " / " + String(state.commandHistory.length) + " 条 · 已加密"
+      : String(state.commandHistory.length) + " 条 · 最多 1000 · 已加密";
+    renderHistorySidebar(list, filtered, query);
     return;
   }
 
@@ -689,6 +1072,198 @@ function renderSessionSidebar(list) {
   list.append(section);
 }
 
+function rememberCommand(command) {
+  const session = activeSession();
+  const value = String(command || "").trim();
+  if (!session || !value || session.history_only) return;
+
+  const entry = {
+    command: value,
+    session_id: session.id,
+    target: session.target || session.name || "",
+    created_at: Date.now()
+  };
+
+  state.commandHistory.unshift(entry);
+  state.commandHistory = state.commandHistory.slice(0, 1000);
+  state.commandHistoryCursor.set(session.id, -1);
+  if (state.nav === "history") renderSidebar();
+
+  RecordCommandHistory(entry).catch((error) => {
+    showToast("命令历史加密保存失败：" + error);
+  });
+}
+
+function looksLikeCommandPrompt(session) {
+  if (!session) return false;
+  const terminal = terminalFor(session.id);
+  const row = terminal.screen[terminal.row] || [];
+  const line = row.slice(0, Math.max(0, terminal.col)).join("").trimEnd();
+  return /(?:[$#>%]|❯|➜|λ)$/.test(line);
+}
+
+function appendCommandDraft(text) {
+  const session = activeSession();
+  if (!session || session.history_only || !text) return;
+  const current = state.commandDrafts.get(session.id) || "";
+  if (!current) {
+    state.commandDraftRecordable.set(session.id, looksLikeCommandPrompt(session));
+  }
+  state.commandDrafts.set(session.id, current + text);
+  state.commandHistoryCursor.set(session.id, -1);
+}
+
+function backspaceCommandDraft() {
+  const session = activeSession();
+  if (!session || session.history_only) return;
+  const current = state.commandDrafts.get(session.id) || "";
+  state.commandDrafts.set(session.id, Array.from(current).slice(0, -1).join(""));
+  state.commandHistoryCursor.set(session.id, -1);
+}
+
+function commitCommandDraft() {
+  const session = activeSession();
+  if (!session || session.history_only) return;
+  const command = state.commandDrafts.get(session.id) || "";
+  if (state.commandDraftRecordable.get(session.id)) {
+    rememberCommand(command);
+  }
+  state.commandDrafts.set(session.id, "");
+  state.commandDraftRecordable.set(session.id, false);
+}
+
+function clearCommandDraft() {
+  const session = activeSession();
+  if (!session) return;
+  state.commandDrafts.set(session.id, "");
+  state.commandDraftRecordable.set(session.id, false);
+  state.commandHistoryCursor.set(session.id, -1);
+}
+
+function sessionCommandHistory(session) {
+  if (!session) return [];
+  const sameTarget = state.commandHistory.filter((item) => item.target === session.target);
+  return sameTarget.length ? sameTarget : state.commandHistory;
+}
+
+async function recallCommand(direction) {
+  const session = activeSession();
+  if (!session || session.state !== "connected") return false;
+  const history = sessionCommandHistory(session);
+  if (!history.length) return false;
+
+  let index = state.commandHistoryCursor.get(session.id) ?? -1;
+  if (direction < 0) {
+    index = Math.min(index + 1, history.length - 1);
+  } else {
+    index = Math.max(index - 1, -1);
+  }
+
+  state.commandHistoryCursor.set(session.id, index);
+  const command = index >= 0 ? history[index].command : "";
+  state.commandDrafts.set(session.id, command);
+  state.commandDraftRecordable.set(session.id, true);
+  await WriteSession(session.id, "\u0015" + command);
+  return true;
+}
+
+async function insertCommandFromHistory(command) {
+  const session = activeSession();
+  if (!session || session.state !== "connected") {
+    showToast("请先打开一个已连接的会话");
+    return;
+  }
+  state.commandDrafts.set(session.id, command);
+  state.commandDraftRecordable.set(session.id, true);
+  state.commandHistoryCursor.set(session.id, -1);
+  await WriteSession(session.id, "\u0015" + command);
+  $("#terminalViewport").focus();
+}
+
+function renderHistorySidebar(list, records = state.commandHistory, query = "") {
+  if (!state.commandHistory.length) {
+    const empty = document.createElement("div");
+    empty.className = "dk-empty-state history-empty-state";
+    empty.innerHTML = "<div><strong>还没有命令历史</strong><p>在终端中输入并执行命令后，会加密保存在这里。</p></div>";
+    list.append(empty);
+    return;
+  }
+
+  if (!records.length) {
+    const empty = document.createElement("div");
+    empty.className = "dk-empty-state history-empty-state";
+    empty.innerHTML = "<div><strong>没有匹配的命令</strong><p>换一个命令关键字或目标主机试试。</p></div>";
+    list.append(empty);
+    return;
+  }
+
+  const section = document.createElement("section");
+  section.className = "connection-group history-group";
+
+  const header = document.createElement("div");
+  header.className = "connection-group-title history-group-title";
+  const label = document.createElement("span");
+  label.textContent = query ? "搜索结果" : "最近命令";
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "history-clear-button";
+  clear.textContent = "清空";
+  clear.addEventListener("click", async () => {
+    try {
+      await ClearCommandHistory();
+      state.commandHistory = [];
+      state.commandHistoryCursor.clear();
+      renderSidebar();
+      showToast("命令历史已清空");
+    } catch (error) {
+      showToast("清空命令历史失败：" + error);
+    }
+  });
+  header.append(label, clear);
+  section.append(header);
+
+  for (const record of records) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "connection-row history-row";
+    row.title = "点击插入到当前终端";
+
+    const avatar = document.createElement("span");
+    avatar.className = "connection-avatar history-avatar";
+    avatar.textContent = "›";
+
+    const content = document.createElement("span");
+    content.className = "history-content";
+
+    const command = document.createElement("span");
+    command.className = "history-command";
+    command.textContent = record.command;
+
+    const meta = document.createElement("span");
+    meta.className = "history-meta";
+
+    const time = document.createElement("span");
+    time.textContent = formatHistoryTime(record.created_at);
+
+    const target = document.createElement("span");
+    target.className = "history-target";
+    target.textContent = record.target || "当前会话";
+
+    meta.append(time, target);
+    content.append(command, meta);
+
+    const action = document.createElement("span");
+    action.className = "history-restore-label";
+    action.textContent = "插入";
+
+    row.append(avatar, content, action);
+    row.addEventListener("click", () => insertCommandFromHistory(record.command));
+    section.append(row);
+  }
+
+  list.append(section);
+}
+
 function renderSessions() {
   const tabs = $("#sessionTabs");
   tabs.replaceChildren();
@@ -740,16 +1315,16 @@ function renderActiveSession() {
   $("#terminalStateText").textContent = session.stage || session.state;
 
   const pill = $("#activeSessionStatus");
-  pill.textContent = stateLabel(session.state);
+  pill.textContent = session.history_only ? "历史" : stateLabel(session.state);
   pill.className = "dk-status-pill";
   if (session.state === "connected") pill.classList.add("is-success");
   if (session.state === "connecting" || session.state === "reconnecting" || session.state === "host_key_pending" || session.state === "authenticating") pill.classList.add("is-warning");
   if (session.state === "failed" || session.state === "security_blocked") pill.classList.add("is-danger");
 
   const banner = $("#sessionBanner");
-  const showBanner = ["reconnecting", "failed", "security_blocked", "host_key_pending"].includes(session.state);
+  const showBanner = !!session.history_only || ["reconnecting", "failed", "security_blocked", "host_key_pending"].includes(session.state);
   banner.classList.toggle("is-hidden", !showBanner);
-  banner.classList.toggle("is-danger", session.state === "failed" || session.state === "security_blocked");
+  banner.classList.toggle("is-danger", !session.history_only && (session.state === "failed" || session.state === "security_blocked"));
   if (showBanner) {
     let text = session.message || stateLabel(session.state);
     if (session.reason_code) text += " · " + session.reason_code;
@@ -758,7 +1333,8 @@ function renderActiveSession() {
   }
 
   $("#retrySessionButton").classList.toggle("is-hidden", session.state !== "reconnecting");
-  $("#disconnectSessionButton").disabled = ["disconnected", "failed", "security_blocked"].includes(session.state);
+  $("#disconnectSessionButton").classList.toggle("is-hidden", !!session.history_only);
+  $("#disconnectSessionButton").disabled = !!session.history_only || ["disconnected", "failed", "security_blocked"].includes(session.state);
   renderTerminal();
 }
 
@@ -1397,12 +1973,26 @@ async function resolveHostKey(action) {
 async function closeSession(id) {
   const session = state.sessions.find((item) => item.id === id);
   if (!session) return;
+
+  if (session.history_only) {
+    state.sessions = state.sessions.filter((item) => item.id !== id);
+    state.terminals.delete(id);
+    if (state.activeSessionId === id) {
+      state.activeSessionId = state.sessions.length ? state.sessions[state.sessions.length - 1].id : "";
+    }
+    renderAll();
+    return;
+  }
+
   if (["connected", "connecting", "reconnecting", "authenticating", "host_key_pending"].includes(session.state)) {
     const confirmed = window.confirm("当前会话仍在活动。断开并关闭这个标签？");
     if (!confirmed) return;
   }
+
+  const terminalText = terminalFor(id).render(false);
   try {
     await CloseSession(id);
+    rememberClosedSession(session, terminalText);
     state.sessions = state.sessions.filter((item) => item.id !== id);
     state.terminals.delete(id);
     if (state.activeSessionId === id) {
@@ -1531,7 +2121,12 @@ async function sendTerminalData(data) {
 }
 
 function keySequence(event) {
-  if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "v") return null;
+  if (event.ctrlKey && event.shiftKey && ["c", "v", "a"].includes(event.key.toLowerCase())) return null;
+  if (event.ctrlKey && event.key === "ArrowLeft") return "\u001b[1;5D";
+  if (event.ctrlKey && event.key === "ArrowRight") return "\u001b[1;5C";
+  if (event.ctrlKey && event.key === "ArrowUp") return "\u001b[1;5A";
+  if (event.ctrlKey && event.key === "ArrowDown") return "\u001b[1;5B";
+  if (event.ctrlKey && event.key === "Backspace") return "\u0017";
   if (event.ctrlKey && event.key.length === 1) {
     const code = event.key.toUpperCase().charCodeAt(0);
     if (code >= 64 && code <= 95) return String.fromCharCode(code - 64);
@@ -1751,18 +2346,71 @@ function bindEvents() {
     resolveHostKey("reject");
   });
 
+  $("#sidebarToggleButton").addEventListener("click", () => {
+    applySidebarCollapsed(!state.sidebarCollapsed);
+  });
+  bindSidebarResize();
+  applySidebarWidth(Number.parseInt(window.localStorage.getItem("ssh-client.sidebar-width"), 10) || SIDEBAR_DEFAULT_WIDTH, false);
+  applySidebarCollapsed(window.localStorage.getItem("ssh-client.sidebar-collapsed") === "1", false);
+
   const viewport = $("#terminalViewport");
   viewport.addEventListener("keydown", async (event) => {
-    if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "k") {
+    const key = event.key.toLowerCase();
+
+    if (event.ctrlKey && !event.altKey && key === "c") {
+      const selectedText = terminalSelectionText();
       event.preventDefault();
-      openCommandPalette();
+      if (selectedText) {
+        await copyTerminalSelection(selectedText);
+      } else {
+        clearCommandDraft();
+        await sendTerminalData("\u0003");
+      }
       return;
     }
-    if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "v") {
+
+    if ((event.ctrlKey && !event.altKey && key === "v") || (event.shiftKey && event.key === "Insert")) {
       event.preventDefault();
-      try { await sendTerminalData(await navigator.clipboard.readText()); } catch (_) {}
+      await pasteTerminalClipboard();
       return;
     }
+
+    if (event.ctrlKey && event.key === "Insert") {
+      event.preventDefault();
+      await copyTerminalSelection();
+      return;
+    }
+
+    if (event.ctrlKey && event.shiftKey && key === "a") {
+      event.preventDefault();
+      selectAllTerminalText();
+      return;
+    }
+
+    if (!event.ctrlKey && !event.altKey && !event.metaKey && event.key === "ArrowUp") {
+      if (await recallCommand(-1)) {
+        event.preventDefault();
+        return;
+      }
+    }
+
+    if (!event.ctrlKey && !event.altKey && !event.metaKey && event.key === "ArrowDown") {
+      if (await recallCommand(1)) {
+        event.preventDefault();
+        return;
+      }
+    }
+
+    if (event.key === "Enter") {
+      commitCommandDraft();
+    } else if (event.key === "Backspace" && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      backspaceCommandDraft();
+    } else if (event.ctrlKey && !event.altKey && key === "u") {
+      clearCommandDraft();
+    } else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1) {
+      appendCommandDraft(event.key);
+    }
+
     const sequence = keySequence(event);
     if (sequence !== null) {
       event.preventDefault();
@@ -1770,16 +2418,35 @@ function bindEvents() {
     }
   });
 
-  viewport.addEventListener("paste", (event) => {
+  viewport.addEventListener("contextmenu", (event) => {
     event.preventDefault();
-    sendTerminalData(event.clipboardData.getData("text"));
+    showTerminalContextMenu(event);
   });
+
+  $("#terminalContextMenu").querySelectorAll("[data-terminal-action]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const action = button.dataset.terminalAction;
+      hideTerminalContextMenu();
+      if (action === "copy") await copyTerminalSelection(state.terminalContextSelection);
+      if (action === "paste") await pasteTerminalClipboard();
+      if (action === "select-all") selectAllTerminalText();
+    });
+  });
+
+  document.addEventListener("pointerdown", (event) => {
+    if (!$("#terminalContextMenu").contains(event.target)) hideTerminalContextMenu();
+  });
+  window.addEventListener("blur", hideTerminalContextMenu);
+  window.addEventListener("resize", hideTerminalContextMenu);
 
   const resizeObserver = new ResizeObserver(() => resizeActiveTerminal());
   resizeObserver.observe(viewport);
 
   window.addEventListener("keydown", (event) => {
-    if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "k" && document.activeElement !== viewport) {
+    const terminalFocused = document.activeElement === viewport;
+    if (terminalFocused) return;
+
+    if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "k") {
       event.preventDefault();
       openCommandPalette();
     }
@@ -1794,6 +2461,7 @@ function bindEvents() {
   });
 }
 
+loadSessionHistory();
 bindEvents();
 loadState().catch((error) => {
   showToast("初始化失败：" + error);

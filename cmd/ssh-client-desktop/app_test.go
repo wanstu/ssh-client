@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -117,6 +120,90 @@ func TestCredentialSavedOnlyAfterConnected(t *testing.T) {
 	}
 	if settings.Profiles[0].Auth.CredentialRef != passwordCredentialRef(profile.ID) {
 		t.Fatalf("credential ref not persisted: %#v", settings.Profiles[0].Auth)
+	}
+}
+
+func TestCommandHistoryEncryptedAndCapped(t *testing.T) {
+	app, _ := newCredentialTestApp(t)
+
+	seed := make([]CommandHistoryEntry, commandHistoryLimit)
+	for i := range seed {
+		seed[i] = CommandHistoryEntry{
+			Command:   "sensitive-command",
+			SessionID: "session_seed",
+			Target:    "root@example:22",
+			CreatedAt: int64(i + 1),
+		}
+	}
+	if err := app.secure.SaveJSON(commandHistorySecureKey, seed); err != nil {
+		t.Fatal(err)
+	}
+
+	history, err := app.RecordCommandHistory(CommandHistoryEntry{
+		Command:   "top-secret-command",
+		SessionID: "session_new",
+		Target:    "root@example:22",
+		CreatedAt: 2000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != commandHistoryLimit {
+		t.Fatalf("history length = %d, want %d", len(history), commandHistoryLimit)
+	}
+	if history[0].Command != "top-secret-command" {
+		t.Fatalf("latest command = %q", history[0].Command)
+	}
+
+	loaded, err := app.GetCommandHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != commandHistoryLimit || loaded[0].Command != "top-secret-command" {
+		t.Fatalf("persisted history mismatch: len=%d first=%q", len(loaded), loaded[0].Command)
+	}
+
+	files, err := os.ReadDir(app.secure.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("encrypted command history file was not created")
+	}
+	for _, entry := range files {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(app.secure.Dir(), entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(data, []byte("top-secret-command")) || bytes.Contains(data, []byte("sensitive-command")) {
+			t.Fatalf("encrypted payload %q contains plaintext command history", entry.Name())
+		}
+	}
+}
+
+func TestCommandHistoryClearIsIdempotent(t *testing.T) {
+	app, _ := newCredentialTestApp(t)
+	if err := app.ClearCommandHistory(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.RecordCommandHistory(CommandHistoryEntry{Command: "pwd"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.ClearCommandHistory(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.ClearCommandHistory(); err != nil {
+		t.Fatal(err)
+	}
+	history, err := app.GetCommandHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 0 {
+		t.Fatalf("history length after clear = %d", len(history))
 	}
 }
 

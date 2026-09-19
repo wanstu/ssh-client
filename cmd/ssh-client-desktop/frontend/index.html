@@ -18,6 +18,7 @@
       <div class="brand-mark" title="SSH Client">&gt;_</div>
       <button class="rail-button is-active" data-nav="connections" title="连接">▣</button>
       <button class="rail-button" data-nav="sessions" title="会话">▤</button>
+      <button class="rail-button" data-nav="history" title="命令历史">◷</button>
       <button class="rail-button" data-nav="snippets" title="命令片段">&lt;/&gt;</button>
     </div>
     <div class="rail-bottom">
@@ -45,10 +46,12 @@
       <span id="runtimeSummary">本地配置</span>
       <button id="refreshButton" class="dk-button dk-button-ghost compact-button" type="button">刷新</button>
     </footer>
+    <div id="sidebarResizeHandle" class="sidebar-resize-handle" role="separator" aria-orientation="vertical" aria-label="调整侧边栏宽度" title="拖动调整侧边栏宽度；双击恢复默认" tabindex="0"></div>
   </aside>
 
   <main class="workspace">
     <header class="workspace-topbar">
+      <button id="sidebarToggleButton" class="sidebar-toggle-button" type="button" aria-label="折叠连接侧边栏" aria-pressed="false" title="折叠连接侧边栏">◧</button>
       <div class="command-launcher">
         <span>⌕</span>
         <button id="commandButton" type="button">搜索连接、切换会话或快速连接…</button>
@@ -94,6 +97,18 @@
           <span id="terminalSizeText">80 × 24</span>
           <span>UTF-8</span>
         </footer>
+      </div>
+
+      <div id="terminalContextMenu" class="terminal-context-menu is-hidden" role="menu" aria-label="终端操作">
+        <button type="button" data-terminal-action="copy" role="menuitem">
+          <span>复制</span><kbd>Ctrl+C</kbd>
+        </button>
+        <button type="button" data-terminal-action="paste" role="menuitem">
+          <span>粘贴</span><kbd>Ctrl+V</kbd>
+        </button>
+        <button type="button" data-terminal-action="select-all" role="menuitem">
+          <span>全选终端文本</span><kbd>Ctrl+Shift+A</kbd>
+        </button>
       </div>
     </section>
   </main>
