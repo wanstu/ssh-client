@@ -60,9 +60,7 @@ const state = {
   terminalContextSelection: "",
   history: [],
   commandHistory: [],
-  commandDrafts: new Map(),
-  commandDraftRecordable: new Map(),
-  commandHistoryCursor: new Map()
+  promptPrefixes: new Map()
 };
 
 const decoder = new TextDecoder("utf-8");
@@ -84,10 +82,85 @@ class TerminalBuffer {
     this.mode = "normal";
     this.sequence = "";
     this.bracketedPaste = false;
+    this.alternateScreen = false;
+    this.applicationCursorKeys = false;
+    this.cursorVisible = true;
+    this.mainScreenState = null;
+    this.scrollTop = 0;
+    this.scrollBottom = rows - 1;
   }
 
   blankRow(cols = this.cols) {
     return Array.from({ length: cols }, () => " ");
+  }
+
+  enterAlternateScreen() {
+    if (this.alternateScreen) return;
+    this.mainScreenState = {
+      screen: this.screen.map((row) => row.slice()),
+      scrollback: this.scrollback.slice(),
+      row: this.row,
+      col: this.col,
+      savedRow: this.savedRow,
+      savedCol: this.savedCol,
+      scrollTop: this.scrollTop,
+      scrollBottom: this.scrollBottom
+    };
+    this.alternateScreen = true;
+    this.screen = Array.from({ length: this.rows }, () => this.blankRow());
+    this.scrollback = [];
+    this.row = 0;
+    this.col = 0;
+    this.savedRow = 0;
+    this.savedCol = 0;
+    this.scrollTop = 0;
+    this.scrollBottom = this.rows - 1;
+  }
+
+  exitAlternateScreen() {
+    if (!this.alternateScreen) return;
+    const saved = this.mainScreenState;
+    this.alternateScreen = false;
+    this.mainScreenState = null;
+    if (!saved) return;
+
+    this.screen = saved.screen.map((row) => {
+      if (row.length > this.cols) return row.slice(0, this.cols);
+      if (row.length < this.cols) return row.concat(Array.from({ length: this.cols - row.length }, () => " "));
+      return row;
+    });
+    while (this.screen.length < this.rows) this.screen.push(this.blankRow());
+    while (this.screen.length > this.rows) this.screen.shift();
+
+    this.scrollback = saved.scrollback.slice(-this.scrollbackLimit);
+    this.row = Math.max(0, Math.min(saved.row, this.rows - 1));
+    this.col = Math.max(0, Math.min(saved.col, this.cols - 1));
+    this.savedRow = Math.max(0, Math.min(saved.savedRow, this.rows - 1));
+    this.savedCol = Math.max(0, Math.min(saved.savedCol, this.cols - 1));
+    this.scrollTop = 0;
+    this.scrollBottom = this.rows - 1;
+  }
+
+  scrollRegionUp(count = 1) {
+    const top = Math.max(0, Math.min(this.scrollTop, this.rows - 1));
+    const bottom = Math.max(top, Math.min(this.scrollBottom, this.rows - 1));
+    for (let i = 0; i < count; i++) {
+      const removed = this.screen.splice(top, 1)[0];
+      this.screen.splice(bottom, 0, this.blankRow());
+      if (!this.alternateScreen && top === 0 && bottom === this.rows - 1 && removed) {
+        this.scrollback.push(removed.join("").replace(/\s+$/, ""));
+        this.trimScrollback();
+      }
+    }
+  }
+
+  scrollRegionDown(count = 1) {
+    const top = Math.max(0, Math.min(this.scrollTop, this.rows - 1));
+    const bottom = Math.max(top, Math.min(this.scrollBottom, this.rows - 1));
+    for (let i = 0; i < count; i++) {
+      this.screen.splice(bottom, 1);
+      this.screen.splice(top, 0, this.blankRow());
+    }
   }
 
   resize(cols, rows) {
@@ -110,6 +183,12 @@ class TerminalBuffer {
     this.rows = rows;
     this.row = Math.max(0, Math.min(this.row, rows - 1));
     this.col = Math.max(0, Math.min(this.col, cols - 1));
+    this.scrollTop = Math.max(0, Math.min(this.scrollTop, rows - 1));
+    this.scrollBottom = Math.max(this.scrollTop, Math.min(this.scrollBottom, rows - 1));
+    if (this.scrollBottom < this.scrollTop || this.scrollBottom >= rows) {
+      this.scrollTop = 0;
+      this.scrollBottom = rows - 1;
+    }
     this.trimScrollback();
   }
 
@@ -128,6 +207,10 @@ class TerminalBuffer {
         this.mode = ch === "\\" ? "normal" : "osc";
         continue;
       }
+      if (this.mode === "charset") {
+        this.mode = "normal";
+        continue;
+      }
       if (this.mode === "esc") {
         if (ch === "[") {
           this.mode = "csi";
@@ -135,6 +218,8 @@ class TerminalBuffer {
         } else if (ch === "]") {
           this.mode = "osc";
           this.sequence = "";
+        } else if ("()*+-%#".includes(ch)) {
+          this.mode = "charset";
         } else if (ch === "7") {
           this.savedRow = this.row;
           this.savedCol = this.col;
@@ -142,6 +227,28 @@ class TerminalBuffer {
         } else if (ch === "8") {
           this.row = this.savedRow;
           this.col = this.savedCol;
+          this.mode = "normal";
+        } else if (ch === "D") {
+          this.indexDown();
+          this.mode = "normal";
+        } else if (ch === "E") {
+          this.col = 0;
+          this.indexDown();
+          this.mode = "normal";
+        } else if (ch === "M") {
+          this.reverseIndex();
+          this.mode = "normal";
+        } else if (ch === "c") {
+          this.screen = Array.from({ length: this.rows }, () => this.blankRow());
+          this.scrollback = [];
+          this.row = 0;
+          this.col = 0;
+          this.savedRow = 0;
+          this.savedCol = 0;
+          this.scrollTop = 0;
+          this.scrollBottom = this.rows - 1;
+          this.applicationCursorKeys = false;
+          this.bracketedPaste = false;
           this.mode = "normal";
         } else {
           this.mode = "normal";
@@ -181,8 +288,15 @@ class TerminalBuffer {
     const params = clean === "" ? [] : clean.split(";").map((value) => Number(value || 0));
     const first = params[0] || 0;
 
-    if (privateMode && params.includes(2004) && (final === "h" || final === "l")) {
-      this.bracketedPaste = final === "h";
+    if (privateMode && (final === "h" || final === "l")) {
+      const enabled = final === "h";
+      if (params.includes(2004)) this.bracketedPaste = enabled;
+      if (params.includes(1)) this.applicationCursorKeys = enabled;
+      if (params.includes(25)) this.cursorVisible = enabled;
+      if (params.includes(47) || params.includes(1047) || params.includes(1049)) {
+        if (enabled) this.enterAlternateScreen();
+        else this.exitAlternateScreen();
+      }
       return;
     }
 
@@ -257,6 +371,47 @@ class TerminalBuffer {
         for (let c = this.col; c < Math.min(this.cols, this.col + count); c++) this.screen[this.row][c] = " ";
         break;
       }
+      case "L": {
+        const count = Math.min(first || 1, this.scrollBottom - this.row + 1);
+        if (this.row >= this.scrollTop && this.row <= this.scrollBottom) {
+          for (let i = 0; i < count; i++) {
+            this.screen.splice(this.row, 0, this.blankRow());
+            this.screen.splice(this.scrollBottom + 1, 1);
+          }
+        }
+        break;
+      }
+      case "M": {
+        const count = Math.min(first || 1, this.scrollBottom - this.row + 1);
+        if (this.row >= this.scrollTop && this.row <= this.scrollBottom) {
+          for (let i = 0; i < count; i++) {
+            this.screen.splice(this.row, 1);
+            this.screen.splice(this.scrollBottom, 0, this.blankRow());
+          }
+        }
+        break;
+      }
+      case "S":
+        this.scrollRegionUp(first || 1);
+        break;
+      case "T":
+        this.scrollRegionDown(first || 1);
+        break;
+      case "d":
+        this.row = Math.max(0, Math.min(this.rows - 1, (first || 1) - 1));
+        break;
+      case "e":
+        this.row = Math.max(0, Math.min(this.rows - 1, this.row + (first || 1)));
+        break;
+      case "r": {
+        const top = Math.max(0, Math.min(this.rows - 1, (params[0] || 1) - 1));
+        const bottom = Math.max(top, Math.min(this.rows - 1, (params[1] || this.rows) - 1));
+        this.scrollTop = top;
+        this.scrollBottom = bottom;
+        this.row = 0;
+        this.col = 0;
+        break;
+      }
       case "s":
         this.savedRow = this.row;
         this.savedCol = this.col;
@@ -280,13 +435,24 @@ class TerminalBuffer {
     }
   }
 
+  indexDown() {
+    if (this.row === this.scrollBottom) {
+      this.scrollRegionUp(1);
+      return;
+    }
+    this.row = Math.min(this.rows - 1, this.row + 1);
+  }
+
+  reverseIndex() {
+    if (this.row === this.scrollTop) {
+      this.scrollRegionDown(1);
+      return;
+    }
+    this.row = Math.max(0, this.row - 1);
+  }
+
   newline() {
-    this.row += 1;
-    if (this.row < this.rows) return;
-    this.scrollback.push(this.screen.shift().join("").replace(/\s+$/, ""));
-    this.screen.push(this.blankRow());
-    this.row = this.rows - 1;
-    this.trimScrollback();
+    this.indexDown();
   }
 
   trimScrollback() {
@@ -312,7 +478,7 @@ class TerminalBuffer {
 
   render(cursorVisible) {
     const screenLines = this.screen.map((row) => row.join("").replace(/\s+$/, ""));
-    if (cursorVisible) {
+    if (cursorVisible && this.cursorVisible) {
       let line = screenLines[this.row] || "";
       if (line.length < this.col) line += " ".repeat(this.col - line.length);
       if (this.col >= line.length) {
@@ -474,6 +640,8 @@ function applySidebarWidth(width, persist = true) {
   const shell = $(".app-shell");
   const handle = $("#sidebarResizeHandle");
   shell.style.setProperty("--ssh-sidebar-width", next + "px");
+  shell.classList.toggle("is-sidebar-narrow", next < 320);
+  shell.classList.toggle("is-sidebar-compact", next < 270);
   handle.setAttribute("aria-valuemin", String(bounds.min));
   handle.setAttribute("aria-valuemax", String(bounds.max));
   handle.setAttribute("aria-valuenow", String(next));
@@ -605,24 +773,11 @@ function normalizePasteText(text) {
   return String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
-function trackPastedDraft(text) {
-  const session = activeSession();
-  if (!session || session.history_only || !text) return;
-  const current = state.commandDrafts.get(session.id) || "";
-  if (!current) {
-    state.commandDraftRecordable.set(session.id, looksLikeCommandPrompt(session));
-  }
-  state.commandDrafts.set(session.id, current + text);
-  state.commandHistoryCursor.set(session.id, -1);
-}
-
 async function sendTerminalPaste(text) {
   const session = activeSession();
   if (!session || session.state !== "connected") return;
   const normalized = normalizePasteText(text);
   if (!normalized) return;
-
-  trackPastedDraft(normalized);
 
   const terminal = terminalFor(session.id);
   const payload = terminal.bracketedPaste
@@ -1004,18 +1159,33 @@ function createConnectionRow(profile) {
   row.type = "button";
   row.className = "connection-row" + (state.selectedProfileId === profile.id ? " is-selected" : "");
   row.dataset.profileId = profile.id;
+  row.title = profile.name + "\n" + profile.username + "@" + profile.host + ":" + profile.port;
 
   const avatar = document.createElement("span");
   avatar.className = "connection-avatar";
   avatar.textContent = escapeInitials(profile.name);
 
   const copy = document.createElement("span");
+  copy.className = "connection-content";
   const name = document.createElement("span");
   name.className = "connection-name";
   name.textContent = profile.name;
   const meta = document.createElement("span");
   meta.className = "connection-meta";
-  meta.textContent = profile.username + "@" + profile.host + ":" + profile.port;
+
+  const user = document.createElement("span");
+  user.className = "connection-user";
+  user.textContent = profile.username ? profile.username + "@" : "";
+
+  const host = document.createElement("span");
+  host.className = "connection-host";
+  host.textContent = profile.host;
+
+  const port = document.createElement("span");
+  port.className = "connection-port";
+  port.textContent = profile.port ? ":" + profile.port : "";
+
+  meta.append(user, host, port);
   copy.append(name, meta);
 
   const dot = document.createElement("span");
@@ -1052,16 +1222,23 @@ function renderSessionSidebar(list) {
     const row = document.createElement("button");
     row.type = "button";
     row.className = "connection-row" + (session.id === state.activeSessionId ? " is-selected" : "");
+    row.title = session.name + "\n" + session.target + "\n" + stateLabel(session.state);
     const avatar = document.createElement("span");
     avatar.className = "connection-avatar";
     avatar.textContent = ">_";
     const copy = document.createElement("span");
+    copy.className = "connection-content";
     const name = document.createElement("span");
     name.className = "connection-name";
     name.textContent = session.name;
     const meta = document.createElement("span");
-    meta.className = "connection-meta";
-    meta.textContent = session.state + " · " + session.target;
+    meta.className = "connection-meta session-meta";
+
+    const target = document.createElement("span");
+    target.className = "session-target-text";
+    target.textContent = session.target;
+
+    meta.append(target);
     copy.append(name, meta);
     const dot = document.createElement("span");
     dot.className = "connection-status " + session.state;
@@ -1072,8 +1249,7 @@ function renderSessionSidebar(list) {
   list.append(section);
 }
 
-function rememberCommand(command) {
-  const session = activeSession();
+function rememberCommand(command, session = activeSession()) {
   const value = String(command || "").trim();
   if (!session || !value || session.history_only) return;
 
@@ -1086,7 +1262,6 @@ function rememberCommand(command) {
 
   state.commandHistory.unshift(entry);
   state.commandHistory = state.commandHistory.slice(0, 1000);
-  state.commandHistoryCursor.set(session.id, -1);
   if (state.nav === "history") renderSidebar();
 
   RecordCommandHistory(entry).catch((error) => {
@@ -1094,77 +1269,39 @@ function rememberCommand(command) {
   });
 }
 
-function looksLikeCommandPrompt(session) {
-  if (!session) return false;
-  const terminal = terminalFor(session.id);
-  const row = terminal.screen[terminal.row] || [];
-  const line = row.slice(0, Math.max(0, terminal.col)).join("").trimEnd();
-  return /(?:[$#>%]|❯|➜|λ)$/.test(line);
+function terminalRowText(terminal, rowIndex = terminal.row) {
+  const row = terminal.screen[rowIndex] || [];
+  return row.join("").replace(/\s+$/, "");
 }
 
-function appendCommandDraft(text) {
-  const session = activeSession();
-  if (!session || session.history_only || !text) return;
-  const current = state.commandDrafts.get(session.id) || "";
-  if (!current) {
-    state.commandDraftRecordable.set(session.id, looksLikeCommandPrompt(session));
+function observeRemotePrompt(sessionId, terminal) {
+  if (!terminal || terminal.alternateScreen) return;
+
+  const raw = (terminal.screen[terminal.row] || [])
+    .slice(0, Math.max(0, terminal.col))
+    .join("");
+  const trimmed = raw.trimEnd();
+  if (!trimmed || !/(?:[$#>%]|❯|➜|λ)$/.test(trimmed)) return;
+
+  const existing = state.promptPrefixes.get(sessionId) || "";
+  if (existing && raw.startsWith(existing) && raw.length > existing.length) {
+    return;
   }
-  state.commandDrafts.set(session.id, current + text);
-  state.commandHistoryCursor.set(session.id, -1);
+  state.promptPrefixes.set(sessionId, raw);
 }
 
-function backspaceCommandDraft() {
-  const session = activeSession();
-  if (!session || session.history_only) return;
-  const current = state.commandDrafts.get(session.id) || "";
-  state.commandDrafts.set(session.id, Array.from(current).slice(0, -1).join(""));
-  state.commandHistoryCursor.set(session.id, -1);
-}
+function captureRenderedCommand(session, terminal) {
+  if (!session || !terminal || session.history_only || terminal.alternateScreen) return;
 
-function commitCommandDraft() {
-  const session = activeSession();
-  if (!session || session.history_only) return;
-  const command = state.commandDrafts.get(session.id) || "";
-  if (state.commandDraftRecordable.get(session.id)) {
-    rememberCommand(command);
-  }
-  state.commandDrafts.set(session.id, "");
-  state.commandDraftRecordable.set(session.id, false);
-}
+  const prefix = state.promptPrefixes.get(session.id);
+  if (!prefix) return;
 
-function clearCommandDraft() {
-  const session = activeSession();
-  if (!session) return;
-  state.commandDrafts.set(session.id, "");
-  state.commandDraftRecordable.set(session.id, false);
-  state.commandHistoryCursor.set(session.id, -1);
-}
+  const line = terminalRowText(terminal);
+  if (!line.startsWith(prefix)) return;
 
-function sessionCommandHistory(session) {
-  if (!session) return [];
-  const sameTarget = state.commandHistory.filter((item) => item.target === session.target);
-  return sameTarget.length ? sameTarget : state.commandHistory;
-}
-
-async function recallCommand(direction) {
-  const session = activeSession();
-  if (!session || session.state !== "connected") return false;
-  const history = sessionCommandHistory(session);
-  if (!history.length) return false;
-
-  let index = state.commandHistoryCursor.get(session.id) ?? -1;
-  if (direction < 0) {
-    index = Math.min(index + 1, history.length - 1);
-  } else {
-    index = Math.max(index - 1, -1);
-  }
-
-  state.commandHistoryCursor.set(session.id, index);
-  const command = index >= 0 ? history[index].command : "";
-  state.commandDrafts.set(session.id, command);
-  state.commandDraftRecordable.set(session.id, true);
-  await WriteSession(session.id, "\u0015" + command);
-  return true;
+  const command = line.slice(prefix.length).trim();
+  if (!command) return;
+  rememberCommand(command, session);
 }
 
 async function insertCommandFromHistory(command) {
@@ -1173,10 +1310,10 @@ async function insertCommandFromHistory(command) {
     showToast("请先打开一个已连接的会话");
     return;
   }
-  state.commandDrafts.set(session.id, command);
-  state.commandDraftRecordable.set(session.id, true);
-  state.commandHistoryCursor.set(session.id, -1);
-  await WriteSession(session.id, "\u0015" + command);
+
+  // "插入"只作为一次终端粘贴。当前光标位置、已有内容以及最终如何编辑，
+  // 全部交给远端 shell/readline 处理，不在客户端模拟清行或移动光标。
+  await sendTerminalPaste(command);
   $("#terminalViewport").focus();
 }
 
@@ -1212,7 +1349,6 @@ function renderHistorySidebar(list, records = state.commandHistory, query = "") 
     try {
       await ClearCommandHistory();
       state.commandHistory = [];
-      state.commandHistoryCursor.clear();
       renderSidebar();
       showToast("命令历史已清空");
     } catch (error) {
@@ -1352,13 +1488,51 @@ function stateLabel(value) {
   return labels[value] || value || "未知";
 }
 
+function renderTerminalContent(element, text) {
+  const fragment = document.createDocumentFragment();
+  const promptPattern = /^([^\s@\n]+@[^:\s\n]+)(:)([^\s\n]*?)([$#>%])(?=[ \t█]|$)/gm;
+  let cursor = 0;
+  let match;
+
+  while ((match = promptPattern.exec(text)) !== null) {
+    if (match.index > cursor) {
+      fragment.append(document.createTextNode(text.slice(cursor, match.index)));
+    }
+
+    const prompt = document.createElement("span");
+    prompt.className = "terminal-prompt";
+
+    const userHost = document.createElement("span");
+    userHost.className = "terminal-prompt-userhost";
+    userHost.textContent = match[1];
+
+    const path = document.createElement("span");
+    path.className = "terminal-prompt-path";
+    path.textContent = match[2] + match[3];
+
+    const sigil = document.createElement("span");
+    sigil.className = "terminal-prompt-sigil";
+    sigil.textContent = match[4];
+
+    prompt.append(userHost, path, sigil);
+    fragment.append(prompt);
+    cursor = match.index + match[0].length;
+  }
+
+  if (cursor < text.length) {
+    fragment.append(document.createTextNode(text.slice(cursor)));
+  }
+
+  element.replaceChildren(fragment);
+}
+
 function renderTerminal() {
   const session = activeSession();
   if (!session) return;
   const viewport = $("#terminalViewport");
   const terminal = terminalFor(session.id);
   const stick = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 48;
-  $("#terminalText").textContent = terminal.render(session.state === "connected");
+  renderTerminalContent($("#terminalText"), terminal.render(session.state === "connected"));
   if (stick) window.requestAnimationFrame(() => { viewport.scrollTop = viewport.scrollHeight; });
 }
 
@@ -2120,8 +2294,7 @@ async function sendTerminalData(data) {
   }
 }
 
-function keySequence(event) {
-  if (event.ctrlKey && event.shiftKey && ["c", "v", "a"].includes(event.key.toLowerCase())) return null;
+function keySequence(event, terminal = null) {
   if (event.ctrlKey && event.key === "ArrowLeft") return "\u001b[1;5D";
   if (event.ctrlKey && event.key === "ArrowRight") return "\u001b[1;5C";
   if (event.ctrlKey && event.key === "ArrowUp") return "\u001b[1;5A";
@@ -2132,17 +2305,18 @@ function keySequence(event) {
     if (code >= 64 && code <= 95) return String.fromCharCode(code - 64);
   }
 
+  const applicationCursor = !!(terminal && terminal.applicationCursorKeys);
   const keys = {
     Enter: "\r",
     Backspace: "\u007f",
     Tab: "\t",
     Escape: "\u001b",
-    ArrowUp: "\u001b[A",
-    ArrowDown: "\u001b[B",
-    ArrowRight: "\u001b[C",
-    ArrowLeft: "\u001b[D",
-    Home: "\u001b[H",
-    End: "\u001b[F",
+    ArrowUp: applicationCursor ? "\u001bOA" : "\u001b[A",
+    ArrowDown: applicationCursor ? "\u001bOB" : "\u001b[B",
+    ArrowRight: applicationCursor ? "\u001bOC" : "\u001b[C",
+    ArrowLeft: applicationCursor ? "\u001bOD" : "\u001b[D",
+    Home: applicationCursor ? "\u001bOH" : "\u001b[H",
+    End: applicationCursor ? "\u001bOF" : "\u001b[F",
     Delete: "\u001b[3~",
     Insert: "\u001b[2~",
     PageUp: "\u001b[5~",
@@ -2168,12 +2342,14 @@ function bindEvents() {
   EventsOn("ssh:output", (payload) => {
     const terminal = terminalFor(payload.session_id);
     terminal.feed(decodeOutput(payload.data_base64));
+    observeRemotePrompt(payload.session_id, terminal);
     if (payload.session_id === state.activeSessionId) renderTerminal();
   });
   EventsOn("ssh:host-key", (challenge) => showHostKeyChallenge(challenge));
   EventsOn("ssh:session-closed", (payload) => {
     state.sessions = state.sessions.filter((session) => session.id !== payload.session_id);
     state.terminals.delete(payload.session_id);
+    state.promptPrefixes.delete(payload.session_id);
     if (state.activeSessionId === payload.session_id) {
       state.activeSessionId = state.sessions.length ? state.sessions[state.sessions.length - 1].id : "";
     }
@@ -2356,14 +2532,40 @@ function bindEvents() {
   const viewport = $("#terminalViewport");
   viewport.addEventListener("keydown", async (event) => {
     const key = event.key.toLowerCase();
+    const session = activeSession();
+    const terminal = session ? terminalFor(session.id) : null;
+    const applicationMode = !!(terminal && terminal.alternateScreen);
 
+    // In full-screen terminal applications (vim/tmux/top/less...), the remote
+    // application owns all ordinary control keys and cursor semantics.
+    if (applicationMode) {
+      if (event.ctrlKey && event.shiftKey && key === "c") {
+        event.preventDefault();
+        await copyTerminalSelection();
+        return;
+      }
+      if ((event.ctrlKey && event.shiftKey && key === "v") || (event.shiftKey && event.key === "Insert")) {
+        event.preventDefault();
+        await pasteTerminalClipboard();
+        return;
+      }
+
+      const sequence = keySequence(event, terminal);
+      if (sequence !== null) {
+        event.preventDefault();
+        await sendTerminalData(sequence);
+      }
+      return;
+    }
+
+    // Convenience clipboard behavior is only applied in an ordinary shell.
+    // With no selection Ctrl+C remains the shell interrupt character.
     if (event.ctrlKey && !event.altKey && key === "c") {
       const selectedText = terminalSelectionText();
       event.preventDefault();
       if (selectedText) {
         await copyTerminalSelection(selectedText);
       } else {
-        clearCommandDraft();
         await sendTerminalData("\u0003");
       }
       return;
@@ -2387,31 +2589,13 @@ function bindEvents() {
       return;
     }
 
-    if (!event.ctrlKey && !event.altKey && !event.metaKey && event.key === "ArrowUp") {
-      if (await recallCommand(-1)) {
-        event.preventDefault();
-        return;
-      }
-    }
-
-    if (!event.ctrlKey && !event.altKey && !event.metaKey && event.key === "ArrowDown") {
-      if (await recallCommand(1)) {
-        event.preventDefault();
-        return;
-      }
-    }
-
+    // Command history is observed from the rendered remote prompt just before
+    // Enter is forwarded. No local readline/history state is simulated.
     if (event.key === "Enter") {
-      commitCommandDraft();
-    } else if (event.key === "Backspace" && !event.ctrlKey && !event.altKey && !event.metaKey) {
-      backspaceCommandDraft();
-    } else if (event.ctrlKey && !event.altKey && key === "u") {
-      clearCommandDraft();
-    } else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1) {
-      appendCommandDraft(event.key);
+      captureRenderedCommand(session, terminal);
     }
 
-    const sequence = keySequence(event);
+    const sequence = keySequence(event, terminal);
     if (sequence !== null) {
       event.preventDefault();
       await sendTerminalData(sequence);
