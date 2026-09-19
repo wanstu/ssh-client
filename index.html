@@ -1,0 +1,1602 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="midnight" data-density="comfortable">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SSH Client · Product Prototype</title>
+<style>
+:root{
+  --app:#090d12;--chrome:#0d1218;--sidebar:#111720;--surface:#141b24;--surface2:#18212d;
+  --surface3:#202b39;--terminal:#080c11;--line:#222c39;--line2:#303d4f;--text:#e8edf4;
+  --text2:#a4afbf;--muted:#6f7d91;--faint:#4e5b6d;--accent:#738dff;--accent2:#9bacff;
+  --accentBg:rgba(115,141,255,.14);--green:#4fd1a1;--yellow:#e6bb63;--red:#ff7f89;
+  --cyan:#63c7d8;--shadow:0 22px 72px rgba(0,0,0,.42);--terminalText:#bec9d8;
+  --terminalDim:#687689;--terminalBlue:#8fa7ff;--terminalGreen:#78ddb7;
+  --row:46px;--sidew:278px;--railw:54px;
+}
+html[data-theme="graphite"]{
+  --app:#111214;--chrome:#17181b;--sidebar:#1b1d21;--surface:#202328;--surface2:#252930;
+  --surface3:#2b3038;--terminal:#101113;--line:#30343a;--line2:#41474f;--text:#f0f1f3;
+  --text2:#b8bcc2;--muted:#858b94;--faint:#626872;--accent:#8b9cff;--accent2:#b4beff;
+  --accentBg:rgba(139,156,255,.14);--shadow:0 22px 72px rgba(0,0,0,.36);
+}
+html[data-theme="daylight"]{
+  --app:#eef1f5;--chrome:#f8fafc;--sidebar:#f4f6f9;--surface:#fff;--surface2:#f4f7fb;
+  --surface3:#e9eef5;--terminal:#131820;--line:#dbe1e9;--line2:#c9d1dc;--text:#202632;
+  --text2:#4f5a69;--muted:#7d8897;--faint:#a3acb8;--accent:#526de8;--accent2:#3f5edb;
+  --accentBg:rgba(82,109,232,.11);--green:#2ea97d;--yellow:#b4862f;--red:#df5b66;
+  --shadow:0 22px 72px rgba(31,42,55,.18);
+}
+html[data-density="compact"]{--row:40px;--sidew:264px}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  overflow:hidden;background:var(--app);color:var(--text);
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+  font-size:13px;
+}
+button,input,select{font:inherit}
+button{color:inherit}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.hidden{display:none!important}
+.app{
+  height:100vh;display:grid;grid-template-rows:46px 1fr;
+  background:radial-gradient(circle at 67% -5%,rgba(115,141,255,.08),transparent 29%),var(--app);
+}
+.titlebar{
+  min-width:0;display:grid;grid-template-columns:calc(var(--railw) + var(--sidew)) minmax(360px,1fr) auto;
+  align-items:center;background:color-mix(in srgb,var(--chrome) 96%,transparent);border-bottom:1px solid var(--line);
+  user-select:none;
+}
+.brand{height:100%;display:flex;align-items:center;gap:10px;padding:0 13px;border-right:1px solid var(--line)}
+.brand-mark{
+  width:28px;height:28px;border-radius:8px;display:grid;place-items:center;color:#fff;
+  background:linear-gradient(135deg,#637df1,#8298ff);box-shadow:0 7px 18px rgba(86,111,224,.25)
+}
+.brand-mark svg{width:15px;height:15px;stroke-width:2.2}
+.brand-copy{display:flex;align-items:baseline;gap:7px;font-weight:720;letter-spacing:-.15px}
+.brand-copy small{font-size:9px;letter-spacing:.75px;color:var(--muted);font-weight:700}
+.command-launcher{display:flex;align-items:center;justify-content:center;padding:0 12px}
+.command-box{
+  width:min(620px,100%);height:31px;border:1px solid var(--line);background:var(--surface);
+  border-radius:8px;display:flex;align-items:center;gap:8px;padding:0 9px;color:var(--muted);cursor:pointer;
+  transition:.15s ease;
+}
+.command-box:hover{background:var(--surface2);border-color:var(--line2)}
+.command-box span:nth-child(2){flex:1;text-align:left;font-size:11.5px}
+.kbd{
+  border:1px solid var(--line2);background:var(--chrome);border-radius:5px;min-width:28px;height:20px;
+  padding:0 5px;display:inline-flex;align-items:center;justify-content:center;color:var(--muted);font-size:9px;
+  box-shadow:inset 0 -1px 0 rgba(255,255,255,.03)
+}
+.window-actions{height:100%;display:flex;align-items:center}
+.win-btn{width:44px;height:100%;border:0;background:transparent;color:var(--muted);cursor:pointer;display:grid;place-items:center}
+.win-btn:hover{background:var(--surface2);color:var(--text)}
+.win-btn.close:hover{background:#c93846;color:#fff}
+.win-btn svg{width:13px;height:13px}
+
+.workspace{min-height:0;display:grid;grid-template-columns:var(--railw) var(--sidew) minmax(0,1fr)}
+.rail{
+  min-height:0;background:var(--chrome);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:10px 0;
+}
+.rail-stack{display:flex;flex-direction:column;gap:6px}
+.rail-btn{
+  width:36px;height:36px;border:0;border-radius:9px;background:transparent;color:var(--muted);
+  cursor:pointer;display:grid;place-items:center;position:relative;transition:.13s ease;
+}
+.rail-btn:hover{background:var(--surface);color:var(--text2)}
+.rail-btn.active{background:var(--accentBg);color:var(--accent2)}
+.rail-btn.active:before{content:"";position:absolute;left:-9px;width:3px;height:17px;border-radius:4px;background:var(--accent)}
+.rail-sep{height:1px;width:26px;background:var(--line);margin:3px 0}
+
+.sidebar{min-width:0;min-height:0;background:var(--sidebar);border-right:1px solid var(--line);display:grid;grid-template-rows:auto auto 1fr auto}
+.side-head{height:51px;padding:0 11px 0 13px;display:flex;align-items:center;justify-content:space-between}
+.side-title-wrap{min-width:0}
+.side-title{font-size:13px;font-weight:730;letter-spacing:-.05px}
+.side-sub{margin-top:2px;font-size:9.5px;color:var(--muted)}
+.side-actions{display:flex;gap:5px}
+.icon-btn{
+  width:29px;height:29px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--muted);
+  cursor:pointer;display:grid;place-items:center;transition:.13s ease;
+}
+.icon-btn:hover{background:var(--surface2);border-color:var(--line);color:var(--text)}
+.icon-btn.emphasis{background:var(--accentBg);color:var(--accent2)}
+.filterbar{padding:0 10px 9px;display:grid;grid-template-columns:1fr auto;gap:6px}
+.search-wrap{position:relative}
+.search-wrap svg{position:absolute;left:9px;top:8px;width:14px;height:14px;color:var(--faint)}
+.search{
+  width:100%;height:31px;border:1px solid var(--line);background:var(--chrome);color:var(--text);
+  border-radius:7px;padding:0 9px 0 29px;outline:none;font-size:11px
+}
+.search::placeholder{color:var(--faint)}
+.filter-btn{
+  height:31px;min-width:31px;border:1px solid var(--line);background:var(--chrome);border-radius:7px;
+  color:var(--muted);cursor:pointer;display:grid;place-items:center
+}
+.filter-btn:hover{background:var(--surface2);color:var(--text)}
+.list-scroll{min-height:0;overflow:auto;padding:0 7px 10px}
+.list-scroll::-webkit-scrollbar,.terminal::-webkit-scrollbar,.detail-body::-webkit-scrollbar{width:8px}
+.list-scroll::-webkit-scrollbar-thumb,.terminal::-webkit-scrollbar-thumb,.detail-body::-webkit-scrollbar-thumb{background:var(--surface3);border-radius:8px}
+.group{margin:2px 0 11px}
+.group-head{
+  height:27px;padding:0 7px;display:flex;align-items:center;justify-content:space-between;
+  color:var(--muted);font-size:9.5px;font-weight:720;letter-spacing:.62px;text-transform:uppercase
+}
+.group-head .group-left{display:flex;align-items:center;gap:6px}
+.group-head button{border:0;background:transparent;color:var(--faint);padding:2px;cursor:pointer}
+.count{min-width:19px;height:17px;border-radius:6px;background:var(--surface2);display:grid;place-items:center;font-size:9px;color:var(--muted)}
+.host{
+  height:var(--row);width:100%;border:1px solid transparent;border-radius:9px;background:transparent;color:inherit;
+  display:grid;grid-template-columns:33px minmax(0,1fr) auto;gap:8px;align-items:center;padding:0 7px;
+  cursor:pointer;text-align:left;position:relative;transition:.12s ease;margin-bottom:2px
+}
+.host:hover{background:var(--surface)}
+.host.selected{background:var(--surface2);border-color:color-mix(in srgb,var(--line2) 66%,transparent)}
+.host-avatar{
+  width:31px;height:31px;border-radius:8px;background:var(--surface3);border:1px solid var(--line2);
+  display:grid;place-items:center;color:var(--text2);font-size:9.5px;font-weight:780;letter-spacing:.2px
+}
+.host.selected .host-avatar{background:var(--accentBg);border-color:color-mix(in srgb,var(--accent) 38%,var(--line));color:var(--accent2)}
+.host-copy{min-width:0}
+.host-name-row{display:flex;align-items:center;gap:6px;min-width:0}
+.host-name{font-size:11.5px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.badge{
+  flex:none;height:16px;padding:0 5px;border-radius:5px;background:var(--surface3);color:var(--muted);
+  font-size:8.5px;display:inline-flex;align-items:center
+}
+.badge.prod{background:rgba(255,127,137,.1);color:#e9959c}
+.badge.test{background:rgba(99,199,216,.1);color:#7dcbd8}
+.host-meta{font-size:9.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.host-end{display:flex;align-items:center;gap:6px}
+.status-dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
+.status-dot.online{background:var(--green);box-shadow:0 0 0 3px color-mix(in srgb,var(--green) 10%,transparent)}
+.status-dot.warn{background:var(--yellow)}
+.status-dot.error{background:var(--red)}
+.status-dot.offline{background:var(--faint)}
+.host-more{opacity:0;width:24px;height:24px;border:0;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;display:grid;place-items:center}
+.host:hover .host-more,.host.selected .host-more{opacity:1}
+.host-more:hover{background:var(--surface3);color:var(--text)}
+.side-foot{
+  min-height:42px;border-top:1px solid var(--line);padding:6px 9px;display:flex;align-items:center;justify-content:space-between;gap:8px
+}
+.side-foot-copy{font-size:9.5px;color:var(--muted)}
+.side-foot-copy strong{color:var(--text2);font-size:10.5px;margin-right:4px}
+
+.main{min-width:0;min-height:0;display:grid;grid-template-rows:39px 1fr 27px;background:var(--app)}
+.tabsbar{min-width:0;display:flex;align-items:stretch;background:var(--chrome);border-bottom:1px solid var(--line)}
+.tabs{min-width:0;display:flex;align-items:stretch;overflow:hidden;flex:1}
+.tab{
+  min-width:148px;max-width:220px;height:100%;border:0;border-right:1px solid var(--line);background:transparent;
+  display:grid;grid-template-columns:8px minmax(0,1fr) auto;gap:8px;align-items:center;padding:0 9px;
+  color:var(--muted);cursor:pointer;text-align:left;position:relative
+}
+.tab:hover{background:var(--surface)}
+.tab.active{background:var(--app);color:var(--text)}
+.tab.active:after{content:"";position:absolute;left:0;right:0;top:0;height:2px;background:var(--accent)}
+.tab-title{font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tab-close{width:20px;height:20px;border:0;border-radius:5px;background:transparent;color:var(--muted);display:grid;place-items:center;cursor:pointer}
+.tab-close:hover{background:var(--surface3);color:var(--text)}
+.tab-add,.tabs-action{
+  width:38px;height:100%;border:0;border-right:1px solid var(--line);background:transparent;color:var(--muted);cursor:pointer;display:grid;place-items:center
+}
+.tab-add:hover,.tabs-action:hover{background:var(--surface);color:var(--text)}
+.tabs-actions{display:flex;margin-left:auto}
+.content-area{min-height:0;position:relative;display:grid}
+.terminal-stage{min-height:0;display:grid;grid-template-rows:40px 1fr;background:var(--terminal)}
+.session-toolbar{
+  min-width:0;height:40px;border-bottom:1px solid rgba(80,95,115,.24);
+  background:color-mix(in srgb,var(--terminal) 94%,var(--surface));display:flex;align-items:center;justify-content:space-between;padding:0 11px
+}
+.session-id{min-width:0;display:flex;align-items:center;gap:8px}
+.session-title{font-size:11px;font-weight:650;color:#dce4ef}
+.session-pill{
+  height:20px;border:1px solid rgba(132,151,177,.22);border-radius:999px;padding:0 7px;
+  display:flex;align-items:center;gap:5px;color:#7f8ea2;font-size:9px
+}
+.session-pill .status-dot{width:6px;height:6px}
+.session-meta{font-size:9.5px;color:#657387;white-space:nowrap}
+.session-tools{display:flex;align-items:center;gap:2px}
+.tbtn{
+  height:27px;border:1px solid transparent;background:transparent;color:#728095;border-radius:6px;
+  padding:0 7px;cursor:pointer;display:flex;align-items:center;gap:5px;font-size:9.5px
+}
+.tbtn:hover{background:#111822;border-color:#1d2937;color:#c3cedd}
+.tbtn.icon-only{width:27px;padding:0;justify-content:center}
+.tbtn svg{width:14px;height:14px}
+.terminal-grid{min-height:0;display:grid;grid-template-columns:1fr}
+.terminal-grid.split{grid-template-columns:1fr 1fr}
+.terminal-pane{min-width:0;min-height:0;position:relative;border-right:1px solid rgba(85,100,120,.24)}
+.terminal-pane:last-child{border-right:0}
+.pane-label{
+  position:absolute;right:10px;top:9px;z-index:1;border:1px solid rgba(120,138,160,.2);background:rgba(18,25,34,.7);
+  color:#6c7a8e;border-radius:5px;padding:3px 6px;font:9px ui-monospace,monospace;opacity:.72
+}
+.terminal{
+  height:100%;overflow:auto;padding:14px 15px 30px;color:var(--terminalText);
+  font:12.2px/1.62 "Cascadia Code","JetBrains Mono","SFMono-Regular",Consolas,monospace;
+  background:
+    linear-gradient(rgba(255,255,255,.009) 1px,transparent 1px),var(--terminal);
+  background-size:100% 25px
+}
+.term-line{min-height:20px;white-space:pre-wrap}
+.term-dim{color:var(--terminalDim)}
+.term-green{color:var(--terminalGreen)}
+.term-blue{color:var(--terminalBlue)}
+.term-yellow{color:#dfbd74}
+.prompt{color:#839dff}
+.cursor{display:inline-block;width:7px;height:14px;background:#a8b6ca;vertical-align:-2px;animation:blink 1.05s step-end infinite}
+@keyframes blink{50%{opacity:0}}
+.statusbar{
+  border-top:1px solid var(--line);background:var(--chrome);display:flex;align-items:center;justify-content:space-between;
+  padding:0 9px;color:var(--muted);font-size:8.8px
+}
+.statusbar>div{display:flex;gap:12px;align-items:center}
+.status-item{display:flex;align-items:center;gap:5px}
+
+.detail-panel{
+  position:absolute;right:0;top:0;bottom:0;width:min(370px,44%);background:var(--sidebar);border-left:1px solid var(--line);
+  box-shadow:-18px 0 48px rgba(0,0,0,.2);z-index:7;display:grid;grid-template-rows:54px 1fr auto;
+  transform:translateX(102%);transition:transform .18s ease
+}
+.detail-panel.open{transform:translateX(0)}
+.detail-head{display:flex;align-items:center;justify-content:space-between;padding:0 13px;border-bottom:1px solid var(--line)}
+.detail-title strong{font-size:12px;display:block}
+.detail-title span{font-size:9.5px;color:var(--muted);margin-top:2px;display:block}
+.detail-body{overflow:auto;padding:14px}
+.detail-section{margin-bottom:18px}
+.detail-label{font-size:9px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:720;margin-bottom:8px}
+.detail-kv{display:grid;grid-template-columns:92px 1fr;gap:7px 10px;font-size:10.5px}
+.detail-kv .k{color:var(--muted)} .detail-kv .v{color:var(--text2);overflow:hidden;text-overflow:ellipsis}
+.tags{display:flex;gap:5px;flex-wrap:wrap}
+.tag{height:22px;padding:0 7px;border:1px solid var(--line);background:var(--surface);border-radius:6px;display:flex;align-items:center;font-size:9.5px;color:var(--text2)}
+.detail-actions{padding:10px 12px;border-top:1px solid var(--line);display:flex;gap:7px}
+.btn{
+  height:31px;border:1px solid var(--line2);background:var(--surface);border-radius:7px;padding:0 11px;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;color:var(--text2);font-size:10.5px
+}
+.btn:hover{background:var(--surface2);color:var(--text)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:white}
+.btn.primary:hover{filter:brightness(1.06)}
+.btn.danger{color:var(--red)}
+.btn svg{width:14px;height:14px}
+
+.popover{
+  position:fixed;z-index:25;width:284px;background:var(--surface);border:1px solid var(--line2);border-radius:10px;
+  box-shadow:var(--shadow);padding:8px;display:none
+}
+.popover.show{display:block}
+.pop-head{padding:6px 7px 8px;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+.pop-item{
+  min-height:34px;border:0;background:transparent;width:100%;border-radius:7px;display:flex;align-items:center;gap:9px;
+  padding:0 8px;color:var(--text2);cursor:pointer;text-align:left;font-size:10.5px
+}
+.pop-item:hover{background:var(--surface2);color:var(--text)}
+.pop-item .meta{margin-left:auto;color:var(--muted);font-size:9px}
+.pop-sep{height:1px;background:var(--line);margin:6px 2px}
+.theme-dot{width:15px;height:15px;border-radius:5px;border:1px solid rgba(255,255,255,.1)}
+.theme-dot.midnight{background:linear-gradient(135deg,#0b0f15 50%,#738dff 50%)}
+.theme-dot.graphite{background:linear-gradient(135deg,#1b1d21 50%,#9aa7ff 50%)}
+.theme-dot.daylight{background:linear-gradient(135deg,#f4f6f9 50%,#526de8 50%)}
+
+.modal-layer{
+  position:fixed;inset:0;z-index:30;background:rgba(4,7,11,.62);backdrop-filter:blur(4px);
+  display:none;align-items:center;justify-content:center
+}
+.modal-layer.show{display:flex}
+.modal{
+  width:min(700px,calc(100vw - 50px));max-height:calc(100vh - 70px);background:var(--surface);border:1px solid var(--line2);
+  border-radius:13px;box-shadow:var(--shadow);display:grid;grid-template-rows:auto 1fr auto;overflow:hidden
+}
+.modal-head{height:56px;border-bottom:1px solid var(--line);padding:0 15px;display:flex;align-items:center;justify-content:space-between}
+.modal-title strong{display:block;font-size:13px}.modal-title span{display:block;color:var(--muted);font-size:9.5px;margin-top:2px}
+.modal-body{overflow:auto;padding:15px}
+.form-tabs{display:flex;gap:4px;padding:3px;background:var(--chrome);border:1px solid var(--line);border-radius:8px;margin-bottom:15px;width:max-content}
+.form-tab{height:26px;border:0;border-radius:6px;background:transparent;color:var(--muted);padding:0 10px;cursor:pointer;font-size:10px}
+.form-tab.active{background:var(--surface2);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.16)}
+.form-grid{display:grid;grid-template-columns:1fr 122px;gap:12px}
+.form-grid.equal{grid-template-columns:1fr 1fr}
+.field{margin-bottom:12px}
+.field label{display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;font-size:9.5px;color:var(--muted)}
+.field label small{color:var(--faint)}
+.field input,.field select{
+  width:100%;height:33px;border-radius:7px;border:1px solid var(--line2);background:var(--chrome);color:var(--text);
+  padding:0 9px;outline:none;font-size:10.5px
+}
+.field input::placeholder{color:var(--faint)}
+.auth-options{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:12px}
+.auth-card{
+  height:54px;border:1px solid var(--line);background:var(--chrome);border-radius:8px;padding:8px 9px;cursor:pointer;text-align:left
+}
+.auth-card strong{font-size:10.5px;display:block}.auth-card span{font-size:9px;color:var(--muted);margin-top:3px;display:block}
+.auth-card.active{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));background:var(--accentBg)}
+.auth-card.active strong{color:var(--accent2)}
+.form-section{margin:3px 0 14px;padding-top:13px;border-top:1px solid var(--line)}
+.form-section-title{font-size:10px;font-weight:700;margin-bottom:10px}
+.setting-row{min-height:42px;display:flex;align-items:center;justify-content:space-between;gap:15px}
+.setting-copy strong{font-size:10.5px;display:block}.setting-copy span{font-size:9px;color:var(--muted)}
+.switch{width:34px;height:18px;border-radius:18px;background:var(--surface3);position:relative;cursor:pointer;flex:none}
+.switch:after{content:"";position:absolute;width:14px;height:14px;border-radius:50%;background:var(--muted);left:2px;top:2px;transition:.13s ease}
+.switch.on{background:color-mix(in srgb,var(--accent) 68%,var(--surface3))}
+.switch.on:after{left:18px;background:white}
+.modal-foot{min-height:56px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 14px}
+.proto-note{font-size:9px;color:var(--muted)}
+
+.palette{
+  width:min(650px,calc(100vw - 60px));background:var(--surface);border:1px solid var(--line2);border-radius:12px;
+  box-shadow:var(--shadow);overflow:hidden;align-self:start;margin-top:94px
+}
+.palette-search{height:48px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;padding:0 13px}
+.palette-search input{flex:1;border:0;background:transparent;color:var(--text);outline:none;font-size:12px}
+.palette-search input::placeholder{color:var(--faint)}
+.palette-list{padding:7px;max-height:360px;overflow:auto}
+.palette-section{font-size:8.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.55px;padding:6px 8px}
+.palette-item{
+  min-height:40px;border:0;background:transparent;border-radius:7px;width:100%;display:grid;grid-template-columns:28px 1fr auto;
+  gap:8px;align-items:center;text-align:left;padding:0 8px;color:var(--text2);cursor:pointer
+}
+.palette-item:hover,.palette-item.active{background:var(--surface2);color:var(--text)}
+.palette-icon{width:28px;height:28px;border:1px solid var(--line);border-radius:7px;display:grid;place-items:center;color:var(--muted)}
+.palette-copy strong{font-size:10.5px;display:block}.palette-copy span{font-size:9px;color:var(--muted)}
+.palette-hint{font-size:9px;color:var(--muted)}
+
+.toast{
+  position:fixed;right:17px;bottom:42px;z-index:40;background:var(--surface2);border:1px solid var(--line2);
+  border-radius:8px;padding:9px 11px;box-shadow:var(--shadow);color:var(--text2);font-size:10px;
+  opacity:0;transform:translateY(7px);pointer-events:none;transition:.17s ease
+}
+.toast.show{opacity:1;transform:none}
+
+.confirm-card{
+  width:390px;background:var(--surface);border:1px solid var(--line2);border-radius:12px;box-shadow:var(--shadow);padding:15px
+}
+.confirm-icon{width:34px;height:34px;border-radius:9px;background:rgba(255,127,137,.11);color:var(--red);display:grid;place-items:center;margin-bottom:11px}
+.confirm-card h3{font-size:13px;margin:0 0 6px}.confirm-card p{font-size:10px;color:var(--muted);line-height:1.55;margin:0 0 14px}
+.confirm-actions{display:flex;justify-content:flex-end;gap:7px}
+
+body.first-run-mode .filterbar,
+body.first-run-mode #connectionList,
+body.first-run-mode .side-foot{display:none!important}
+body.first-run-mode .sidebar{grid-template-rows:auto 1fr}
+.no-results{
+  display:none;text-align:center;padding:30px 16px;color:var(--muted);font-size:9.5px;line-height:1.6
+}
+.no-results.show{display:block}
+.no-results strong{display:block;color:var(--text2);font-size:10.5px;margin-bottom:4px}
+.bulk-mode .host{grid-template-columns:23px 33px minmax(0,1fr) auto;padding-left:6px}
+.bulk-mode .host:before{
+  content:"";width:16px;height:16px;border:1px solid var(--line2);border-radius:5px;background:var(--chrome);display:grid;place-items:center
+}
+.bulk-mode .host.bulk-selected:before{content:"✓";background:var(--accent);border-color:var(--accent);color:white;font-size:10px;font-weight:800}
+.bulk-mode .host.selected{background:transparent;border-color:transparent}
+.bulk-mode .host.bulk-selected{background:var(--accentBg);border-color:color-mix(in srgb,var(--accent) 34%,var(--line))}
+.bulk-bar{
+  display:none;border-top:1px solid var(--line);background:var(--sidebar);padding:7px 8px;gap:6px;align-items:center;flex-wrap:wrap
+}
+.bulk-bar.show{display:flex}
+.bulk-count{font-size:9.5px;color:var(--text2);margin-right:auto;padding-left:3px}
+.bulk-action{
+  height:28px;border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:0 8px;
+  font-size:9px;color:var(--text2);cursor:pointer
+}
+.bulk-action:hover{background:var(--surface2)}
+.bulk-action.danger{color:var(--red)}
+.group-row{
+  min-height:46px;border:1px solid var(--line);background:var(--chrome);border-radius:8px;padding:0 10px;
+  display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;margin-bottom:7px
+}
+.group-row strong{font-size:10.5px;display:block}.group-row span{font-size:9px;color:var(--muted);margin-top:2px;display:block}
+.group-actions{display:flex;gap:4px}
+.group-actions button{width:27px;height:27px;border:0;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;display:grid;place-items:center}
+.group-actions button:hover{background:var(--surface2);color:var(--text)}
+.route-preview{
+  border:1px solid var(--line);background:var(--chrome);border-radius:8px;padding:10px 11px;margin:4px 0 12px
+}
+.route-title{font-size:8.8px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.55px;margin-bottom:8px}
+.route-line{display:flex;align-items:center;gap:8px;color:var(--text2);font-size:10px}
+.route-node{
+  border:1px solid var(--line2);background:var(--surface);border-radius:7px;padding:6px 8px;min-width:0
+}
+.route-node strong{display:block;font-size:9.5px}.route-node span{display:block;font-size:8.5px;color:var(--muted);margin-top:2px}
+.route-arrow{color:var(--muted)}
+.inline-note{font-size:9px;color:var(--muted);line-height:1.5;margin-top:-3px;margin-bottom:10px}
+.scenario-btn{
+  border:0;background:transparent;color:var(--muted);padding:2px 5px;border-radius:4px;cursor:pointer;font-size:8.8px
+}
+.scenario-btn:hover{background:var(--surface2);color:var(--text)}
+.state-banner{
+  position:absolute;left:12px;right:12px;top:50px;z-index:5;min-height:48px;border:1px solid var(--line2);
+  background:color-mix(in srgb,var(--surface) 94%,transparent);backdrop-filter:blur(10px);border-radius:9px;
+  display:none;align-items:center;gap:10px;padding:8px 10px;box-shadow:0 10px 28px rgba(0,0,0,.2)
+}
+.state-banner.show{display:flex}
+.state-banner.warn{border-color:color-mix(in srgb,var(--yellow) 38%,var(--line));background:color-mix(in srgb,var(--surface) 92%,#5c4515 8%)}
+.state-banner.error{border-color:color-mix(in srgb,var(--red) 38%,var(--line));background:color-mix(in srgb,var(--surface) 92%,#5c1b22 8%)}
+.state-banner-icon{
+  width:30px;height:30px;border-radius:8px;background:var(--surface2);display:grid;place-items:center;color:var(--yellow);flex:none
+}
+.state-banner.error .state-banner-icon{color:var(--red)}
+.state-banner-copy{min-width:0;flex:1}
+.state-banner-copy strong{display:block;font-size:10.5px}
+.state-banner-copy span{display:block;font-size:9px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.state-banner-actions{display:flex;gap:6px;flex:none}
+.mini-btn{
+  height:27px;border:1px solid var(--line2);background:var(--surface2);border-radius:6px;padding:0 8px;
+  color:var(--text2);cursor:pointer;font-size:9px
+}
+.mini-btn:hover{background:var(--surface3);color:var(--text)}
+.state-surface{
+  position:absolute;inset:40px 0 0;z-index:4;background:var(--terminal);display:none;align-items:center;justify-content:center;
+  padding:28px
+}
+.state-surface.show{display:flex}
+.state-card{width:min(560px,90%);text-align:center}
+.state-art{
+  width:58px;height:58px;border-radius:16px;margin:0 auto 16px;border:1px solid rgba(120,140,166,.18);
+  background:#0f151d;display:grid;place-items:center;color:#728399
+}
+.state-art svg{width:25px;height:25px}
+.state-card h2{font-size:15px;margin:0 0 6px;color:#dfe7f2}
+.state-card p{font-size:10px;line-height:1.65;color:#6e7b8e;margin:0 auto 15px;max-width:430px}
+.state-actions{display:flex;gap:7px;justify-content:center;flex-wrap:wrap}
+.state-card .btn{background:#111822;border-color:#263343}
+.state-card .btn.primary{background:var(--accent);border-color:var(--accent)}
+.connection-steps{
+  width:min(520px,92%);margin:17px auto 0;border:1px solid rgba(105,122,145,.2);background:#0d1218;border-radius:9px;
+  padding:5px;text-align:left
+}
+.connection-step{
+  min-height:34px;border-radius:6px;padding:0 9px;display:grid;grid-template-columns:18px 1fr auto;gap:8px;align-items:center;
+  font-size:9.5px;color:#718095
+}
+.connection-step.active{background:#121a24;color:#c8d2df}
+.connection-step.done{color:#78c9a8}
+.connection-step.failed{background:rgba(255,127,137,.06);color:#e28d95}
+.step-mark{width:16px;height:16px;border-radius:50%;border:1px solid #344253;display:grid;place-items:center;font-size:8px}
+.connection-step.done .step-mark{border-color:#3a8d70;color:#70d4ae}
+.connection-step.failed .step-mark{border-color:#8b4650;color:#ff8b95}
+.step-meta{font-size:8.5px;color:#59677a}
+.security-modal{width:min(620px,calc(100vw - 50px))}
+.security-hero{display:flex;gap:12px;align-items:flex-start;margin-bottom:15px}
+.security-icon{
+  width:40px;height:40px;border-radius:10px;background:rgba(230,187,99,.1);color:var(--yellow);display:grid;place-items:center;flex:none
+}
+.security-icon.danger{background:rgba(255,127,137,.1);color:var(--red)}
+.security-copy h3{font-size:13px;margin:1px 0 5px}
+.security-copy p{font-size:9.7px;line-height:1.58;color:var(--muted);margin:0}
+.fingerprint-card{
+  border:1px solid var(--line);background:var(--chrome);border-radius:8px;padding:10px 11px;margin:9px 0
+}
+.fp-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;color:var(--muted);font-size:9px}
+.fp-value{font:10px/1.55 "Cascadia Code",Consolas,monospace;color:var(--text2);word-break:break-all}
+.fp-compare{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+.fp-old,.fp-new{border:1px solid var(--line);background:var(--chrome);border-radius:8px;padding:9px}
+.fp-old strong,.fp-new strong{display:block;font-size:8.8px;margin-bottom:6px;color:var(--muted)}
+.fp-new{border-color:color-mix(in srgb,var(--red) 32%,var(--line))}
+.security-note{
+  border-left:3px solid var(--yellow);background:rgba(230,187,99,.06);padding:8px 10px;border-radius:0 7px 7px 0;
+  font-size:9.2px;line-height:1.55;color:var(--text2);margin-top:10px
+}
+.security-note.danger{border-color:var(--red);background:rgba(255,127,137,.06)}
+.scenario-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.scenario-card{
+  min-height:72px;border:1px solid var(--line);background:var(--chrome);border-radius:9px;padding:10px;text-align:left;cursor:pointer;color:var(--text2)
+}
+.scenario-card:hover{background:var(--surface2);border-color:var(--line2)}
+.scenario-card strong{font-size:10.5px;display:block;margin-bottom:4px}
+.scenario-card span{font-size:9px;line-height:1.45;color:var(--muted);display:block}
+.scenario-card.security{border-color:color-mix(in srgb,var(--yellow) 24%,var(--line))}
+.first-run{
+  position:absolute;inset:0;z-index:10;background:var(--app);display:none;align-items:center;justify-content:center;padding:30px
+}
+.first-run.show{display:flex}
+.first-run-card{width:min(720px,94%);text-align:center}
+.first-run-logo{
+  width:60px;height:60px;border-radius:17px;margin:0 auto 15px;background:linear-gradient(135deg,#607af0,#8399ff);
+  box-shadow:0 12px 35px rgba(83,105,220,.25);display:grid;place-items:center;color:white
+}
+.first-run-logo svg{width:27px;height:27px;stroke-width:2.2}
+.first-run h1{font-size:20px;margin:0 0 7px}.first-run>div>p{font-size:10.5px;color:var(--muted);margin:0 auto 21px;max-width:460px;line-height:1.7}
+.start-options{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;text-align:left}
+.start-option{
+  min-height:126px;border:1px solid var(--line);background:var(--surface);border-radius:11px;padding:13px;cursor:pointer;color:var(--text2)
+}
+.start-option:hover{background:var(--surface2);border-color:var(--line2)}
+.start-option-icon{width:32px;height:32px;border-radius:8px;background:var(--accentBg);color:var(--accent2);display:grid;place-items:center;margin-bottom:10px}
+.start-option strong{font-size:11px;display:block;margin-bottom:5px}.start-option span{font-size:9.3px;color:var(--muted);line-height:1.55;display:block}
+.first-run-foot{margin-top:14px;font-size:9px;color:var(--faint)}
+.auth-retry{
+  display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:12px;text-align:left
+}
+.auth-retry input{
+  height:32px;border-radius:7px;border:1px solid #2b3747;background:#0d1218;color:#dbe3ee;padding:0 9px;outline:none;font-size:10px
+}
+.error-code{font:9px ui-monospace,monospace;color:#647286;margin-top:7px}
+
+@media(max-width:980px){
+  :root{--sidew:240px}
+  .titlebar{grid-template-columns:calc(var(--railw) + var(--sidew)) minmax(250px,1fr) auto}
+  .session-meta{display:none}.detail-panel{width:46%}
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+<symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 7 5 5-5 5"/><path d="M11 17h9"/></symbol>
+<symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></symbol>
+<symbol id="i-sessions" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></symbol>
+<symbol id="i-code" viewBox="0 0 24 24"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"/></symbol>
+<symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H10.4v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1A1.7 1.7 0 0 0 2.9 13H3v-4h-.1A1.7 1.7 0 0 0 4.6 8a1.7 1.7 0 0 0-.34-1.88L4.2 6.06l2.83-2.83.06.06A1.7 1.7 0 0 0 9 3.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V2h3.2v.1A1.7 1.7 0 0 0 15 3.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 8a1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1.1.4H21v3.2h.1A1.7 1.7 0 0 0 19.4 15Z"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+<symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></symbol>
+<symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9Z"/></symbol>
+<symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></symbol>
+<symbol id="i-split" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></symbol>
+<symbol id="i-max" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1"/></symbol>
+<symbol id="i-minus" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+<symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="m16.5 3.5 4 4L8 20l-5 1 1-5Z"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/></symbol>
+<symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 5 14h7l-1 8 8-12h-7Z"/></symbol>
+<symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18h1.5a1.5 1.5 0 0 0 0-3H12a2 2 0 0 1 0-4h2a7 7 0 0 0 0-14Z"/><path d="M7.5 10h.01M9 6.5h.01M14 6.5h.01M17 10h.01"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.7 2.8 8.2 7 10 4.2-1.8 7-5.3 7-10V6Z"/><path d="m9 12 2 2 4-4"/></symbol>
+<symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 3 20h18Z"/><path d="M12 9v5M12 17h.01"/></symbol>
+<symbol id="i-wifi" viewBox="0 0 24 24"><path d="M5 9a11 11 0 0 1 14 0M8 12.5a6.5 6.5 0 0 1 8 0M11 16a2 2 0 0 1 2 0"/><path d="M12 20h.01"/></symbol>
+<symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 8-8M16 7l2 2M14 9l2 2"/></symbol>
+<symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></symbol>
+<symbol id="i-checks" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 2.5 2.5L16 9"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3Z"/></symbol>
+</svg>
+
+<div class="app">
+<header class="titlebar">
+  <div class="brand">
+    <div class="brand-mark"><svg><use href="#i-terminal"/></svg></div>
+    <div class="brand-copy">SSH Client <small>PRODUCT PROTOTYPE</small></div>
+  </div>
+  <div class="command-launcher">
+    <button class="command-box" id="commandLauncher">
+      <svg><use href="#i-search"/></svg>
+      <span>搜索连接、打开会话或执行快捷操作…</span>
+      <span class="kbd">Ctrl K</span>
+    </button>
+  </div>
+  <div class="window-actions">
+    <button class="win-btn"><svg><use href="#i-minus"/></svg></button>
+    <button class="win-btn"><svg><use href="#i-max"/></svg></button>
+    <button class="win-btn close"><svg><use href="#i-x"/></svg></button>
+  </div>
+</header>
+
+<div class="workspace">
+<nav class="rail">
+  <div class="rail-stack">
+    <button class="rail-btn active" data-nav="connections" title="连接"><svg><use href="#i-server"/></svg></button>
+    <button class="rail-btn" data-nav="sessions" title="会话"><svg><use href="#i-sessions"/></svg></button>
+    <button class="rail-btn" data-nav="snippets" title="命令片段"><svg><use href="#i-code"/></svg></button>
+    <div class="rail-sep"></div>
+    <button class="rail-btn" id="quickAction" title="快速连接"><svg><use href="#i-bolt"/></svg></button>
+  </div>
+  <div class="rail-stack">
+    <button class="rail-btn" id="themeButton" title="外观"><svg><use href="#i-palette"/></svg></button>
+    <button class="rail-btn" id="settingsButton" title="设置"><svg><use href="#i-settings"/></svg></button>
+  </div>
+</nav>
+
+<aside class="sidebar">
+  <div class="side-head">
+    <div class="side-title-wrap">
+      <div class="side-title" id="sideTitle">连接</div>
+      <div class="side-sub" id="sideSub">8 个主机 · 2 个活动会话</div>
+    </div>
+    <div class="side-actions">
+      <button class="icon-btn" id="batchModeBtn" title="批量选择"><svg><use href="#i-checks"/></svg></button>
+      <button class="icon-btn" id="collapseGroups" title="折叠分组"><svg><use href="#i-chevron"/></svg></button>
+      <button class="icon-btn emphasis" id="newConnection" title="新建连接"><svg><use href="#i-plus"/></svg></button>
+    </div>
+  </div>
+
+  <div class="filterbar">
+    <div class="search-wrap">
+      <svg><use href="#i-search"/></svg>
+      <input class="search" id="hostSearch" placeholder="搜索名称、地址、用户或标签">
+    </div>
+    <button class="filter-btn" id="filterButton" title="筛选"><svg><use href="#i-sliders"/></svg></button>
+  </div>
+
+  <div class="list-scroll" id="connectionList">
+    <section class="group">
+      <div class="group-head"><div class="group-left"><button>⌄</button><span>收藏</span></div><span class="count">3</span></div>
+      <button class="host selected" data-host="prod-web-01" data-search="prod-web-01 root 10.10.12.18 production web linux">
+        <div class="host-avatar">P1</div>
+        <div class="host-copy">
+          <div class="host-name-row"><span class="host-name">prod-web-01</span><span class="badge prod">生产</span></div>
+          <div class="host-meta">root@10.10.12.18:22</div>
+        </div>
+        <div class="host-end"><span class="status-dot online"></span><span class="host-more"><svg><use href="#i-more"/></svg></span></div>
+      </button>
+      <button class="host" data-host="db-primary" data-search="db-primary admin 10.10.20.11 production database">
+        <div class="host-avatar">DB</div>
+        <div class="host-copy">
+          <div class="host-name-row"><span class="host-name">db-primary</span><span class="badge prod">生产</span></div>
+          <div class="host-meta">admin@10.10.20.11:22</div>
+        </div>
+        <div class="host-end"><span class="status-dot offline"></span><span class="host-more"><svg><use href="#i-more"/></svg></span></div>
+      </button>
+      <button class="host" data-host="staging-api" data-search="staging-api ubuntu 172.16.8.35 testing api">
+        <div class="host-avatar">ST</div>
+        <div class="host-copy">
+          <div class="host-name-row"><span class="host-name">staging-api</span><span class="badge test">测试</span></div>
+          <div class="host-meta">ubuntu@172.16.8.35:22</div>
+        </div>
+        <div class="host-end"><span class="status-dot warn"></span><span class="host-more"><svg><use href="#i-more"/></svg></span></div>
+      </button>
+    </section>
+
+    <section class="group">
+      <div class="group-head"><div class="group-left"><button>⌄</button><span>生产环境</span></div><span class="count">3</span></div>
+      <button class="host" data-host="prod-web-02" data-search="prod-web-02 root 10.10.12.19 production web">
+        <div class="host-avatar">P2</div><div class="host-copy"><div class="host-name-row"><span class="host-name">prod-web-02</span></div><div class="host-meta">root@10.10.12.19:22</div></div>
+        <div class="host-end"><span class="status-dot offline"></span><span class="host-more"><svg><use href="#i-more"/></svg></span></div>
+      </button>
+      <button class="host" data-host="worker-01" data-search="worker-01 deploy 10.10.18.31 production worker">
+        <div class="host-avatar">WK</div><div class="host-copy"><div class="host-name-row"><span class="host-name">worker-01</span></div><div class="host-meta">deploy@10.10.18.31:22</div></div>
+        <div class="host-end"><span class="status-dot offline"></span><span class="host-more"><svg><use href="#i-more"/></svg></span></div>
+      </button>
+      <button class="host" data-host="cache-01" data-search="cache-01 ops 10.10.24.8 production cache redis">
+        <div class="host-avatar">CA</div><div class="host-copy"><div class="host-name-row"><span class="host-name">cache-01</span></div><div class="host-meta">ops@10.10.24.8:22</div></div>
+        <div class="host-end"><span class="status-dot offline"></span><span class="host-more"><svg><use href="#i-more"/></svg></span></div>
+      </button>
+    </section>
+
+    <section class="group">
+      <div class="group-head"><div class="group-left"><button>⌄</button><span>测试环境</span></div><span class="count">2</span></div>
+      <button class="host" data-host="qa-linux" data-search="qa-linux tester 192.168.50.24 qa testing">
+        <div class="host-avatar">QA</div><div class="host-copy"><div class="host-name-row"><span class="host-name">qa-linux</span></div><div class="host-meta">tester@192.168.50.24:22</div></div>
+        <div class="host-end"><span class="status-dot offline"></span><span class="host-more"><svg><use href="#i-more"/></svg></span></div>
+      </button>
+      <button class="host" data-host="debian-vm" data-search="debian-vm vwanstu 192.168.56.101 lab testing">
+        <div class="host-avatar">DV</div><div class="host-copy"><div class="host-name-row"><span class="host-name">debian-vm</span></div><div class="host-meta">vwanstu@192.168.56.101:22</div></div>
+        <div class="host-end"><span class="status-dot offline"></span><span class="host-more"><svg><use href="#i-more"/></svg></span></div>
+      </button>
+    </section>
+    <div class="no-results" id="noSearchResults">
+      <strong>没有匹配的连接</strong>
+      尝试搜索主机名、IP、用户名、分组或标签。
+    </div>
+  </div>
+
+  <div class="list-scroll hidden" id="sessionList">
+    <section class="group">
+      <div class="group-head"><div class="group-left"><span>活动会话</span></div><span class="count">2</span></div>
+      <button class="host selected"><div class="host-avatar"><svg><use href="#i-terminal"/></svg></div><div class="host-copy"><div class="host-name">prod-web-01</div><div class="host-meta">已连接 · 38 ms · 18 分钟</div></div><span class="status-dot online"></span></button>
+      <button class="host"><div class="host-avatar"><svg><use href="#i-terminal"/></svg></div><div class="host-copy"><div class="host-name">staging-api</div><div class="host-meta">正在重连 · 第 2 次尝试</div></div><span class="status-dot warn"></span></button>
+    </section>
+    <section class="group">
+      <div class="group-head"><div class="group-left"><span>最近关闭</span></div><span class="count">2</span></div>
+      <button class="host"><div class="host-avatar">DB</div><div class="host-copy"><div class="host-name">db-primary</div><div class="host-meta">今天 08:42 · 12 分钟</div></div></button>
+      <button class="host"><div class="host-avatar">DV</div><div class="host-copy"><div class="host-name">debian-vm</div><div class="host-meta">昨天 23:18 · 1 小时 6 分</div></div></button>
+    </section>
+  </div>
+
+  <div class="list-scroll hidden" id="snippetList">
+    <section class="group">
+      <div class="group-head"><div class="group-left"><span>常用命令</span></div><span class="count">4</span></div>
+      <button class="host"><div class="host-avatar">UP</div><div class="host-copy"><div class="host-name">查看系统负载</div><div class="host-meta">uptime</div></div></button>
+      <button class="host"><div class="host-avatar">DF</div><div class="host-copy"><div class="host-name">查看磁盘占用</div><div class="host-meta">df -h</div></div></button>
+      <button class="host"><div class="host-avatar">PS</div><div class="host-copy"><div class="host-name">查看进程</div><div class="host-meta">ps aux</div></div></button>
+      <button class="host"><div class="host-avatar">LG</div><div class="host-copy"><div class="host-name">查看服务日志</div><div class="host-meta">journalctl -u …</div></div></button>
+    </section>
+    <div style="padding:12px;color:var(--muted);font-size:9.5px;line-height:1.6">命令片段只作为可插入文本管理，不默认自动执行。涉及危险命令时，产品应明确要求用户确认。</div>
+  </div>
+
+  <div class="side-foot" id="normalSideFoot">
+    <div class="side-foot-copy"><strong>本地配置</strong> 未开启云同步</div>
+    <button class="icon-btn" id="sideMore"><svg><use href="#i-more"/></svg></button>
+  </div>
+  <div class="bulk-bar" id="bulkBar">
+    <span class="bulk-count"><strong id="bulkCount">0</strong> 个已选</span>
+    <button class="bulk-action" id="bulkMove">移动</button>
+    <button class="bulk-action" id="bulkTag">标签</button>
+    <button class="bulk-action" id="bulkFavorite">收藏</button>
+    <button class="bulk-action danger" id="bulkDelete">删除</button>
+  </div>
+</aside>
+
+<main class="main">
+  <div class="tabsbar">
+    <div class="tabs">
+      <button class="tab active" data-tab="prod"><span class="status-dot online"></span><span class="tab-title">prod-web-01</span><span class="tab-close"><svg><use href="#i-x"/></svg></span></button>
+      <button class="tab" data-tab="staging"><span class="status-dot warn"></span><span class="tab-title">staging-api · 重连中</span><span class="tab-close"><svg><use href="#i-x"/></svg></span></button>
+      <button class="tab-add" id="tabAdd" title="新会话"><svg><use href="#i-plus"/></svg></button>
+    </div>
+    <div class="tabs-actions">
+      <button class="tabs-action" id="splitButton" title="拆分终端"><svg><use href="#i-split"/></svg></button>
+      <button class="tabs-action" id="detailButton" title="连接详情"><svg><use href="#i-server"/></svg></button>
+      <button class="tabs-action" id="tabsMore"><svg><use href="#i-more"/></svg></button>
+    </div>
+  </div>
+
+  <div class="content-area">
+    <section class="terminal-stage">
+      <div class="session-toolbar">
+        <div class="session-id">
+          <span class="session-title">prod-web-01</span>
+          <span class="session-pill"><span class="status-dot online"></span>已连接</span>
+          <span class="session-meta">root@10.10.12.18:22 · SSH 2.0 · 38 ms</span>
+        </div>
+        <div class="session-tools">
+          <button class="tbtn" id="copyHost"><svg><use href="#i-copy"/></svg>复制地址</button>
+          <button class="tbtn" id="reconnect"><svg><use href="#i-refresh"/></svg>重连</button>
+          <button class="tbtn icon-only" id="sessionMore"><svg><use href="#i-more"/></svg></button>
+        </div>
+      </div>
+
+      <div class="terminal-grid" id="terminalGrid">
+        <div class="terminal-pane">
+          <span class="pane-label">shell · 1</span>
+          <div class="terminal">
+            <div class="term-line term-dim">Connecting to 10.10.12.18...</div>
+            <div class="term-line term-green">✓ SSH session established</div>
+            <div class="term-line">Linux prod-web-01 6.8.0-40-generic #40-Ubuntu SMP x86_64</div>
+            <div class="term-line term-dim">Last login: Sat Sep 19 09:03:12 2026 from 10.10.1.42</div>
+            <div class="term-line">&nbsp;</div>
+            <div class="term-line"><span class="prompt">root@prod-web-01</span>:<span class="term-blue">~</span># uptime</div>
+            <div class="term-line"> 09:05:22 up 37 days, 2:14, 2 users, load average: 0.18, 0.22, 0.20</div>
+            <div class="term-line"><span class="prompt">root@prod-web-01</span>:<span class="term-blue">~</span># df -h /</div>
+            <div class="term-line">Filesystem      Size  Used Avail Use% Mounted on</div>
+            <div class="term-line">/dev/sda2        80G   31G   45G  41% /</div>
+            <div class="term-line"><span class="prompt">root@prod-web-01</span>:<span class="term-blue">~</span># <span class="cursor"></span></div>
+          </div>
+        </div>
+        <div class="terminal-pane hidden" id="splitPane">
+          <span class="pane-label">shell · 2</span>
+          <div class="terminal">
+            <div class="term-line term-dim">New split pane · same connection</div>
+            <div class="term-line"><span class="prompt">root@prod-web-01</span>:<span class="term-blue">~</span># <span class="cursor"></span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="state-banner warn" id="reconnectBanner">
+      <div class="state-banner-icon"><svg><use href="#i-wifi"/></svg></div>
+      <div class="state-banner-copy">
+        <strong>连接已中断，正在自动重连</strong>
+        <span>第 2 次尝试 · 4 秒后重试 · 当前终端输出与滚动位置会保留</span>
+      </div>
+      <div class="state-banner-actions">
+        <button class="mini-btn" id="retryNow">立即重试</button>
+        <button class="mini-btn" id="stopRetry">停止重连</button>
+      </div>
+    </div>
+
+    <div class="state-surface" id="connectingState">
+      <div class="state-card">
+        <div class="state-art"><svg><use href="#i-terminal"/></svg></div>
+        <h2 id="connectingTitle">正在连接 prod-web-01</h2>
+        <p>连接过程拆成明确步骤，用户可以知道当前卡在哪一层，而不是只看到一个无限旋转的 Loading。</p>
+        <div class="connection-steps">
+          <div class="connection-step done"><span class="step-mark">✓</span><span>解析主机地址</span><span class="step-meta">12 ms</span></div>
+          <div class="connection-step done"><span class="step-mark">✓</span><span>建立 TCP 连接</span><span class="step-meta">21 ms</span></div>
+          <div class="connection-step active"><span class="step-mark">3</span><span>协商 SSH 与主机身份</span><span class="step-meta">进行中</span></div>
+          <div class="connection-step"><span class="step-mark">4</span><span>用户认证</span><span class="step-meta">等待</span></div>
+          <div class="connection-step"><span class="step-mark">5</span><span>启动远程 Shell</span><span class="step-meta">等待</span></div>
+        </div>
+        <div class="state-actions" style="margin-top:14px"><button class="btn" data-scenario="normal">取消连接</button></div>
+      </div>
+    </div>
+
+    <div class="state-surface" id="authFailedState">
+      <div class="state-card">
+        <div class="state-art" style="color:var(--red)"><svg><use href="#i-key"/></svg></div>
+        <h2>身份验证失败</h2>
+        <p>服务器可以访问，但没有接受当前认证信息。连接配置与终端标签会保留，不需要重新创建连接。</p>
+        <div class="connection-steps">
+          <div class="connection-step done"><span class="step-mark">✓</span><span>网络连接</span><span class="step-meta">正常</span></div>
+          <div class="connection-step done"><span class="step-mark">✓</span><span>主机身份验证</span><span class="step-meta">已确认</span></div>
+          <div class="connection-step failed"><span class="step-mark">!</span><span>用户认证 · Permission denied</span><span class="step-meta">失败</span></div>
+        </div>
+        <div class="auth-retry"><input type="password" placeholder="重新输入密码（原型，不会提交）"><button class="btn primary" id="retryAuth">重新认证</button></div>
+        <div class="state-actions" style="margin-top:9px"><button class="btn" id="editAuthFromError">编辑认证配置</button><button class="btn" data-scenario="normal">关闭错误状态</button></div>
+        <div class="error-code">AUTH_METHOD_REJECTED · password/publickey</div>
+      </div>
+    </div>
+
+    <div class="state-surface" id="timeoutState">
+      <div class="state-card">
+        <div class="state-art" style="color:var(--yellow)"><svg><use href="#i-wifi"/></svg></div>
+        <h2>无法连接到主机</h2>
+        <p>10.10.12.18:22 在 10 秒内没有响应。这里把网络错误和认证错误分开表达，并提供最少但有用的下一步。</p>
+        <div class="connection-steps">
+          <div class="connection-step done"><span class="step-mark">✓</span><span>解析主机地址</span><span class="step-meta">10.10.12.18</span></div>
+          <div class="connection-step failed"><span class="step-mark">!</span><span>建立 TCP 连接</span><span class="step-meta">超时 10s</span></div>
+          <div class="connection-step"><span class="step-mark">3</span><span>SSH 握手</span><span class="step-meta">未开始</span></div>
+        </div>
+        <div class="state-actions" style="margin-top:14px"><button class="btn primary" id="retryTimeout">重试</button><button class="btn" id="editNetworkFromError">检查连接设置</button><button class="btn" data-scenario="normal">关闭</button></div>
+        <div class="error-code">NETWORK_TIMEOUT · tcp connect 10.10.12.18:22</div>
+      </div>
+    </div>
+
+    <div class="first-run" id="firstRunState">
+      <div class="first-run-card">
+        <div class="first-run-logo"><svg><use href="#i-terminal"/></svg></div>
+        <h1>开始你的第一个 SSH 会话</h1>
+        <p>连接配置默认保存在本机。你可以手动创建连接，也可以从现有 SSH 配置导入；首次连接仍会要求确认主机身份。</p>
+        <div class="start-options">
+          <button class="start-option" id="firstNew">
+            <span class="start-option-icon"><svg><use href="#i-plus"/></svg></span>
+            <strong>新建 SSH 连接</strong>
+            <span>填写 Host、Port、Username 与认证方式。适合第一次使用。</span>
+          </button>
+          <button class="start-option" id="firstImport">
+            <span class="start-option-icon"><svg><use href="#i-file"/></svg></span>
+            <strong>从 SSH Config 导入</strong>
+            <span>预览并选择要导入的 Host，不直接覆盖现有配置。</span>
+          </button>
+          <button class="start-option" id="firstQuick">
+            <span class="start-option-icon"><svg><use href="#i-bolt"/></svg></span>
+            <strong>临时快速连接</strong>
+            <span>只建立一次会话，不要求先保存成连接条目。</span>
+          </button>
+        </div>
+        <div class="first-run-foot">Prototype state · 后续实现时再决定是否自动检测 ~/.ssh/config</div>
+      </div>
+    </div>
+
+    <aside class="detail-panel" id="detailPanel">
+      <div class="detail-head">
+        <div class="detail-title"><strong>prod-web-01</strong><span>连接详情</span></div>
+        <button class="icon-btn" id="closeDetail"><svg><use href="#i-x"/></svg></button>
+      </div>
+      <div class="detail-body">
+        <div class="detail-section">
+          <div class="detail-label">连接</div>
+          <div class="detail-kv">
+            <div class="k">地址</div><div class="v">10.10.12.18</div>
+            <div class="k">端口</div><div class="v">22</div>
+            <div class="k">用户名</div><div class="v">root</div>
+            <div class="k">认证</div><div class="v">SSH 私钥</div>
+            <div class="k">终端</div><div class="v">xterm-256color</div>
+          </div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-label">运行状态</div>
+          <div class="detail-kv">
+            <div class="k">状态</div><div class="v" style="color:var(--green)">已连接</div>
+            <div class="k">延迟</div><div class="v">38 ms</div>
+            <div class="k">已连接</div><div class="v">18 分 24 秒</div>
+            <div class="k">重连策略</div><div class="v">网络恢复后自动重试</div>
+          </div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-label">标签</div>
+          <div class="tags"><span class="tag">生产环境</span><span class="tag">Web</span><span class="tag">Linux</span><span class="tag">收藏</span></div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-label">主机指纹</div>
+          <div style="font:9.5px/1.55 ui-monospace,monospace;color:var(--muted);word-break:break-all;background:var(--chrome);border:1px solid var(--line);border-radius:7px;padding:8px">SHA256:Wv8dQf…cP2k93sJ</div>
+        </div>
+      </div>
+      <div class="detail-actions">
+        <button class="btn" id="editConnection"><svg><use href="#i-edit"/></svg>编辑</button>
+        <button class="btn danger" id="disconnectButton">断开会话</button>
+      </div>
+    </aside>
+  </div>
+
+  <footer class="statusbar">
+    <div><span class="status-item"><span class="status-dot online"></span>SSH</span><span>AES256-GCM</span><span>UTF-8</span></div>
+    <div><span>38 ms</span><span>80 × 24</span><button class="scenario-btn" id="scenarioButton">Prototype v4 · 场景</button></div>
+  </footer>
+</main>
+</div>
+</div>
+
+<div class="popover" id="themePopover">
+  <div class="pop-head">应用主题</div>
+  <button class="pop-item theme-choice" data-theme="midnight"><span class="theme-dot midnight"></span>Midnight Blue<span class="meta">默认</span></button>
+  <button class="pop-item theme-choice" data-theme="graphite"><span class="theme-dot graphite"></span>Graphite</button>
+  <button class="pop-item theme-choice" data-theme="daylight"><span class="theme-dot daylight"></span>Daylight</button>
+  <div class="pop-sep"></div>
+  <div class="pop-head">界面密度</div>
+  <button class="pop-item density-choice" data-density="comfortable">舒适<span class="meta">46 px</span></button>
+  <button class="pop-item density-choice" data-density="compact">紧凑<span class="meta">40 px</span></button>
+  <div class="pop-sep"></div>
+  <button class="pop-item" id="openAppearance"><svg><use href="#i-settings"/></svg>更多外观设置</button>
+</div>
+
+<div class="popover" id="hostPopover">
+  <button class="pop-item" id="hostOpen"><svg><use href="#i-terminal"/></svg>打开新会话<span class="meta">Enter</span></button>
+  <button class="pop-item" id="hostDetails"><svg><use href="#i-server"/></svg>查看连接详情</button>
+  <button class="pop-item"><svg><use href="#i-star"/></svg>取消收藏</button>
+  <div class="pop-sep"></div>
+  <button class="pop-item" id="hostDuplicate"><svg><use href="#i-copy"/></svg>复制为新连接</button>
+  <button class="pop-item" id="hostMove"><svg><use href="#i-folder"/></svg>移动到分组…</button>
+  <button class="pop-item" id="hostEdit"><svg><use href="#i-edit"/></svg>编辑连接</button>
+  <div class="pop-sep"></div>
+  <button class="pop-item" id="hostDelete" style="color:var(--red)"><svg><use href="#i-trash"/></svg>删除连接…</button>
+</div>
+
+<div class="popover" id="filterPopover" style="width:300px">
+  <div class="pop-head">连接状态</div>
+  <button class="pop-item filter-option" data-filter="all"><span class="status-dot online"></span>全部连接<span class="meta">8</span></button>
+  <button class="pop-item filter-option" data-filter="online"><span class="status-dot online"></span>已连接<span class="meta">1</span></button>
+  <button class="pop-item filter-option" data-filter="attention"><span class="status-dot warn"></span>需要注意<span class="meta">1</span></button>
+  <button class="pop-item filter-option" data-filter="offline"><span class="status-dot offline"></span>未连接<span class="meta">6</span></button>
+  <div class="pop-sep"></div>
+  <div class="pop-head">环境</div>
+  <button class="pop-item">生产环境<span class="meta">6</span></button>
+  <button class="pop-item">测试环境<span class="meta">2</span></button>
+  <div class="pop-sep"></div>
+  <button class="pop-item" id="clearFilters"><svg><use href="#i-x"/></svg>清除所有筛选</button>
+</div>
+
+<div class="popover" id="sessionPopover" style="width:250px">
+  <button class="pop-item"><svg><use href="#i-edit"/></svg>重命名标签</button>
+  <button class="pop-item"><svg><use href="#i-sessions"/></svg>克隆会话</button>
+  <button class="pop-item"><svg><use href="#i-file"/></svg>导出当前滚动内容…</button>
+  <div class="pop-sep"></div>
+  <button class="pop-item">清空终端显示<span class="meta">Ctrl L</span></button>
+  <button class="pop-item" id="menuReconnect"><svg><use href="#i-refresh"/></svg>重新连接</button>
+  <div class="pop-sep"></div>
+  <button class="pop-item" id="menuDisconnect" style="color:var(--red)">断开并保留标签</button>
+</div>
+
+<div class="popover" id="tabsPopover" style="width:260px">
+  <button class="pop-item">固定当前标签</button>
+  <button class="pop-item">关闭其他标签</button>
+  <button class="pop-item">关闭右侧标签</button>
+  <div class="pop-sep"></div>
+  <button class="pop-item">恢复最近关闭的会话<span class="meta">Ctrl Shift T</span></button>
+  <button class="pop-item">按连接状态排序</button>
+</div>
+
+<div class="popover" id="libraryPopover" style="width:270px">
+  <button class="pop-item" id="manageGroups"><svg><use href="#i-folder"/></svg>管理分组</button>
+  <button class="pop-item" id="importFromLibrary"><svg><use href="#i-file"/></svg>从 SSH Config 导入…</button>
+  <button class="pop-item"><svg><use href="#i-file"/></svg>导出连接配置…</button>
+  <div class="pop-sep"></div>
+  <button class="pop-item">打开本地配置目录</button>
+  <button class="pop-item">备份与恢复…</button>
+</div>
+
+<div class="modal-layer" id="groupManagerModal">
+  <div class="modal" style="width:min(620px,calc(100vw - 50px))">
+    <div class="modal-head">
+      <div class="modal-title"><strong>管理连接分组</strong><span>分组只负责组织连接，不影响 SSH 行为</span></div>
+      <button class="icon-btn modal-close" data-close="groupManagerModal"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="group-row">
+        <div><strong>生产环境</strong><span>3 个连接 · 排序 1</span></div>
+        <div class="group-actions"><button title="重命名"><svg><use href="#i-edit"/></svg></button><button title="删除"><svg><use href="#i-trash"/></svg></button></div>
+      </div>
+      <div class="group-row">
+        <div><strong>测试环境</strong><span>2 个连接 · 排序 2</span></div>
+        <div class="group-actions"><button title="重命名"><svg><use href="#i-edit"/></svg></button><button title="删除"><svg><use href="#i-trash"/></svg></button></div>
+      </div>
+      <div class="group-row">
+        <div><strong>客户环境</strong><span>0 个连接 · 排序 3</span></div>
+        <div class="group-actions"><button title="重命名"><svg><use href="#i-edit"/></svg></button><button title="删除"><svg><use href="#i-trash"/></svg></button></div>
+      </div>
+      <div class="security-note" style="margin-top:12px">删除分组默认不会删除连接。组内连接回到“未分组”。如果未来提供“同时删除连接”，必须作为单独危险操作确认。</div>
+      <div class="field" style="margin-top:14px"><label>新建分组</label><div style="display:grid;grid-template-columns:1fr auto;gap:7px"><input placeholder="例如：海外生产环境"><button class="btn" id="addGroupButton">添加</button></div></div>
+    </div>
+    <div class="modal-foot"><span class="proto-note">Prototype group manager</span><button class="btn primary modal-close" data-close="groupManagerModal">完成</button></div>
+  </div>
+</div>
+
+<div class="modal-layer" id="moveGroupModal">
+  <div class="confirm-card" style="width:420px">
+    <div class="confirm-icon" style="color:var(--accent2);background:var(--accentBg)"><svg><use href="#i-folder"/></svg></div>
+    <h3>移动到分组</h3>
+    <p id="moveGroupText">选择目标分组。移动只改变连接的组织位置，不改变 Host、认证或 Jump Host 设置。</p>
+    <div class="field"><select><option>生产环境</option><option>测试环境</option><option>客户环境</option><option>未分组</option></select></div>
+    <div class="confirm-actions"><button class="btn modal-close" data-close="moveGroupModal">取消</button><button class="btn primary" id="confirmMoveGroup">移动</button></div>
+  </div>
+</div>
+
+<div class="modal-layer" id="deleteConnectionModal">
+  <div class="confirm-card">
+    <div class="confirm-icon"><svg><use href="#i-trash"/></svg></div>
+    <h3 id="deleteConnectionTitle">删除连接？</h3>
+    <p id="deleteConnectionText">只删除本地 Connection Profile。当前活动会话如果存在，将独立保留直到用户关闭。</p>
+    <div class="confirm-actions"><button class="btn modal-close" data-close="deleteConnectionModal">取消</button><button class="btn danger" id="confirmDeleteConnection">删除</button></div>
+  </div>
+</div>
+
+<div class="modal-layer" id="connectionModal">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title"><strong id="connectionModalTitle">新建 SSH 连接</strong><span>定义连接资料与会话偏好；当前仅为交互原型</span></div>
+      <button class="icon-btn modal-close" data-close="connectionModal"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-tabs">
+        <button class="form-tab active" data-form="basic">基本</button>
+        <button class="form-tab" data-form="auth">认证</button>
+        <button class="form-tab" data-form="network">网络</button>
+        <button class="form-tab" data-form="terminal">终端</button>
+      </div>
+
+      <div class="form-page" data-page="basic">
+        <div class="field"><label>连接名称 <small>必填</small></label><input value="prod-web-01" placeholder="例如：生产 Web 01"></div>
+        <div class="form-grid">
+          <div class="field"><label>主机地址 <small>IP 或域名</small></label><input value="10.10.12.18"></div>
+          <div class="field"><label>端口</label><input value="22"></div>
+        </div>
+        <div class="form-grid equal">
+          <div class="field"><label>用户名</label><input value="root"></div>
+          <div class="field"><label>分组</label><select><option>生产环境</option><option>测试环境</option><option>未分组</option></select></div>
+        </div>
+        <div class="field"><label>标签 <small>用逗号分隔</small></label><input value="Web, Linux, 生产环境"></div>
+        <div class="form-section">
+          <div class="setting-row"><div class="setting-copy"><strong>加入收藏</strong><span>固定显示在连接列表顶部</span></div><div class="switch on"></div></div>
+          <div class="setting-row"><div class="setting-copy"><strong>连接后保留标签页</strong><span>断线时显示重连状态，而不是直接关闭</span></div><div class="switch on"></div></div>
+        </div>
+      </div>
+
+      <div class="form-page hidden" data-page="auth">
+        <div class="auth-options">
+          <button class="auth-card"><strong>密码</strong><span>连接时输入或安全保存</span></button>
+          <button class="auth-card active"><strong>SSH 私钥</strong><span>推荐用于常用服务器</span></button>
+          <button class="auth-card"><strong>SSH Agent</strong><span>由系统 Agent 提供凭据</span></button>
+        </div>
+        <div class="field"><label>私钥文件</label><input value="~/.ssh/id_ed25519" placeholder="选择私钥文件"></div>
+        <div class="field"><label>密钥口令 <small>可选</small></label><input type="password" value="prototype"></div>
+        <div class="form-section">
+          <div class="setting-row"><div class="setting-copy"><strong>首次连接验证主机指纹</strong><span>不静默接受未知主机</span></div><div class="switch on"></div></div>
+          <div class="setting-row"><div class="setting-copy"><strong>保存认证配置</strong><span>原型仅展示，不保存真实凭据</span></div><div class="switch on"></div></div>
+        </div>
+      </div>
+
+      <div class="form-page hidden" data-page="network">
+        <div class="auth-options" id="networkModeCards">
+          <button class="auth-card active" data-network-mode="direct"><strong>Direct</strong><span>直接连接目标主机</span></button>
+          <button class="auth-card" data-network-mode="jump"><strong>Jump Host</strong><span>通过已保存的跳板机连接</span></button>
+          <button class="auth-card" data-network-mode="socks"><strong>SOCKS5</strong><span>通过代理访问目标主机</span></button>
+        </div>
+
+        <div id="networkDirectPanel">
+          <div class="inline-note">Direct 不增加中间连接层，目标主机的 Host Key 与认证流程保持独立。</div>
+        </div>
+
+        <div id="networkJumpPanel" class="hidden">
+          <div class="field"><label>Jump Host <small>引用已保存连接，不复制凭据</small></label>
+            <select id="jumpProfileSelect">
+              <option>bastion-prod · ops@10.10.1.10:22</option>
+              <option>bastion-staging · ubuntu@172.16.1.10:22</option>
+            </select>
+          </div>
+          <div class="route-preview">
+            <div class="route-title">连接链路</div>
+            <div class="route-line">
+              <div class="route-node"><strong>本机</strong><span>Local</span></div>
+              <span class="route-arrow">→</span>
+              <div class="route-node"><strong>bastion-prod</strong><span>ops@10.10.1.10</span></div>
+              <span class="route-arrow">→</span>
+              <div class="route-node"><strong>prod-web-01</strong><span>root@10.10.12.18</span></div>
+            </div>
+          </div>
+          <div class="security-note">Jump Host 本身也是独立 Connection Profile。它拥有自己的 Host Key、认证方式和错误状态；目标连接只保存 jump_profile_id。</div>
+        </div>
+
+        <div id="networkSocksPanel" class="hidden">
+          <div class="form-grid">
+            <div class="field"><label>SOCKS5 地址</label><input value="127.0.0.1" placeholder="host"></div>
+            <div class="field"><label>端口</label><input value="1080"></div>
+          </div>
+          <div class="setting-row"><div class="setting-copy"><strong>代理需要认证</strong><span>未来实现时凭据进入安全存储</span></div><div class="switch"></div></div>
+        </div>
+
+        <div class="form-grid equal">
+          <div class="field"><label>连接超时</label><select><option>10 秒</option><option>20 秒</option><option>30 秒</option></select></div>
+          <div class="field"><label>Keepalive</label><select><option>30 秒</option><option>60 秒</option><option>关闭</option></select></div>
+        </div>
+        <div class="form-section">
+          <div class="setting-row"><div class="setting-copy"><strong>网络恢复后自动重连</strong><span>只对网络类中断生效，不对认证失败循环重试</span></div><div class="switch on"></div></div>
+          <div class="setting-row"><div class="setting-copy"><strong>连接失败时保留标签</strong><span>错误信息留在当前会话中便于查看</span></div><div class="switch on"></div></div>
+        </div>
+      </div>
+
+      <div class="form-page hidden" data-page="terminal">
+        <div class="form-grid equal">
+          <div class="field"><label>终端类型</label><select><option>xterm-256color</option><option>xterm</option></select></div>
+          <div class="field"><label>编码</label><select><option>UTF-8</option><option>GBK</option></select></div>
+        </div>
+        <div class="form-grid equal">
+          <div class="field"><label>字体</label><select><option>Cascadia Code</option><option>JetBrains Mono</option><option>Consolas</option></select></div>
+          <div class="field"><label>字号</label><select><option>13 px</option><option>12 px</option><option>14 px</option></select></div>
+        </div>
+        <div class="field"><label>终端配色</label><select><option>跟随应用主题 · Midnight</option><option>One Dark</option><option>Solarized Dark</option><option>Light</option></select></div>
+        <div class="form-section">
+          <div class="setting-row"><div class="setting-copy"><strong>复制时自动去除末尾换行</strong><span>适合复制单条命令或路径</span></div><div class="switch on"></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="proto-note">Prototype only · 不读取密钥、不存储密码、不建立网络连接</span>
+      <div style="display:flex;gap:7px"><button class="btn modal-close" data-close="connectionModal">取消</button><button class="btn primary" id="saveConnection">保存连接</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-layer" id="settingsModal">
+  <div class="modal" style="width:min(760px,calc(100vw - 50px))">
+    <div class="modal-head">
+      <div class="modal-title"><strong>设置 · 外观与交互</strong><span>产品级偏好原型</span></div>
+      <button class="icon-btn modal-close" data-close="settingsModal"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-section" style="border-top:0;padding-top:0">
+        <div class="form-section-title">主题</div>
+        <div class="auth-options">
+          <button class="auth-card theme-choice" data-theme="midnight"><strong>Midnight Blue</strong><span>默认，适合长期终端使用</span></button>
+          <button class="auth-card theme-choice" data-theme="graphite"><strong>Graphite</strong><span>中性灰，降低蓝色占比</span></button>
+          <button class="auth-card theme-choice" data-theme="daylight"><strong>Daylight</strong><span>亮色应用外壳，终端仍保持深色</span></button>
+        </div>
+      </div>
+      <div class="form-section">
+        <div class="form-section-title">交互</div>
+        <div class="setting-row"><div class="setting-copy"><strong>双击主机打开新会话</strong><span>单击只选择，避免误连接</span></div><div class="switch on"></div></div>
+        <div class="setting-row"><div class="setting-copy"><strong>关闭活动会话前确认</strong><span>避免误关正在运行的任务</span></div><div class="switch on"></div></div>
+        <div class="setting-row"><div class="setting-copy"><strong>断线后保留会话输出</strong><span>保留上下文，并在标签中显示“已断开”</span></div><div class="switch on"></div></div>
+      </div>
+      <div class="form-section">
+        <div class="form-section-title">终端</div>
+        <div class="form-grid equal">
+          <div class="field"><label>字体</label><select><option>Cascadia Code</option><option>JetBrains Mono</option><option>Consolas</option></select></div>
+          <div class="field"><label>默认字号</label><select><option>13 px</option><option>12 px</option><option>14 px</option></select></div>
+        </div>
+        <div class="form-grid equal">
+          <div class="field"><label>光标</label><select><option>方块</option><option>竖线</option><option>下划线</option></select></div>
+          <div class="field"><label>滚动回溯</label><select><option>10,000 行</option><option>50,000 行</option><option>不限</option></select></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot"><span class="proto-note">设置只改变原型表现</span><button class="btn primary modal-close" data-close="settingsModal">完成</button></div>
+  </div>
+</div>
+
+<div class="modal-layer" id="paletteModal">
+  <div class="palette">
+    <div class="palette-search"><svg><use href="#i-search"/></svg><input id="paletteInput" placeholder="输入主机名、地址或操作…"><span class="kbd">Esc</span></div>
+    <div class="palette-list">
+      <div class="palette-section">最近连接</div>
+      <button class="palette-item active"><span class="palette-icon"><svg><use href="#i-terminal"/></svg></span><span class="palette-copy"><strong>prod-web-01</strong><span>root@10.10.12.18:22 · 已连接</span></span><span class="palette-hint">Enter</span></button>
+      <button class="palette-item"><span class="palette-icon"><svg><use href="#i-server"/></svg></span><span class="palette-copy"><strong>staging-api</strong><span>ubuntu@172.16.8.35:22 · 重连中</span></span><span class="palette-hint">Enter</span></button>
+      <div class="palette-section">操作</div>
+      <button class="palette-item" id="paletteNew"><span class="palette-icon"><svg><use href="#i-plus"/></svg></span><span class="palette-copy"><strong>新建 SSH 连接</strong><span>打开连接配置</span></span><span class="palette-hint">Ctrl N</span></button>
+      <button class="palette-item" id="paletteSplit"><span class="palette-icon"><svg><use href="#i-split"/></svg></span><span class="palette-copy"><strong>拆分当前终端</strong><span>在当前会话右侧创建新 Shell</span></span><span class="palette-hint">Alt \</span></button>
+      <button class="palette-item" id="paletteTheme"><span class="palette-icon"><svg><use href="#i-palette"/></svg></span><span class="palette-copy"><strong>切换主题</strong><span>Midnight / Graphite / Daylight</span></span></button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-layer" id="confirmModal">
+  <div class="confirm-card">
+    <div class="confirm-icon"><svg><use href="#i-terminal"/></svg></div>
+    <h3>断开当前 SSH 会话？</h3>
+    <p>终端输出会保留在标签页中，标签状态会变为“已断开”。这是原型确认流程，不会断开任何真实连接。</p>
+    <div class="confirm-actions"><button class="btn modal-close" data-close="confirmModal">取消</button><button class="btn danger" id="confirmDisconnect">断开</button></div>
+  </div>
+</div>
+
+<div class="modal-layer" id="hostKeyModal">
+  <div class="modal security-modal">
+    <div class="modal-head">
+      <div class="modal-title"><strong>确认主机身份</strong><span>第一次连接到 qa-linux</span></div>
+      <button class="icon-btn modal-close" data-close="hostKeyModal"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="security-hero">
+        <div class="security-icon"><svg><use href="#i-shield"/></svg></div>
+        <div class="security-copy">
+          <h3>这是你第一次连接到 192.168.50.24</h3>
+          <p>SSH Client 尚未保存这个服务器的主机密钥。确认指纹与服务器管理员提供的信息一致后，再决定是否信任。</p>
+        </div>
+      </div>
+      <div class="fingerprint-card">
+        <div class="fp-head"><span>ED25519 · SHA256</span><button class="mini-btn" id="copyFingerprint">复制指纹</button></div>
+        <div class="fp-value">SHA256:6cWQ3mJxWzZqF4cXf8H7F4s8sR93u3Y8Jt0mKpL2j7A</div>
+      </div>
+      <div class="detail-kv" style="margin-top:12px">
+        <div class="k">主机</div><div class="v">qa-linux · 192.168.50.24:22</div>
+        <div class="k">算法</div><div class="v">ssh-ed25519</div>
+        <div class="k">来源</div><div class="v">首次连接，未存在本地记录</div>
+      </div>
+      <div class="security-note">产品默认不提供“以后全部自动信任未知主机”的全局开关。主机身份确认应保持为每台服务器的显式决定。</div>
+    </div>
+    <div class="modal-foot">
+      <span class="proto-note">安全原型 · 不会写入 known_hosts</span>
+      <div style="display:flex;gap:7px"><button class="btn modal-close" data-close="hostKeyModal">取消连接</button><button class="btn" id="trustOnce">仅本次信任</button><button class="btn primary" id="trustSave">信任并保存</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-layer" id="hostKeyChangedModal">
+  <div class="modal security-modal">
+    <div class="modal-head">
+      <div class="modal-title"><strong style="color:var(--red)">主机身份已变化</strong><span>prod-web-01 · 需要人工确认</span></div>
+      <button class="icon-btn modal-close" data-close="hostKeyChangedModal"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="security-hero">
+        <div class="security-icon danger"><svg><use href="#i-alert"/></svg></div>
+        <div class="security-copy">
+          <h3>服务器返回了与历史记录不同的主机密钥</h3>
+          <p>这可能是服务器重装或密钥轮换，也可能意味着连接被拦截。SSH Client 不会在这个状态下自动继续连接。</p>
+        </div>
+      </div>
+      <div class="fp-compare">
+        <div class="fp-old"><strong>之前保存的指纹</strong><div class="fp-value">SHA256:Wv8dQf9h1X…cP2k93sJ</div></div>
+        <div class="fp-new"><strong>本次收到的指纹</strong><div class="fp-value">SHA256:K4n2rM8b7D…aQ5t71xV</div></div>
+      </div>
+      <div class="security-note danger">不要把“继续连接”作为主按钮。用户应先通过可信渠道确认服务器确实更换了主机密钥，再更新本地记录。</div>
+      <div class="detail-kv" style="margin-top:13px">
+        <div class="k">主机</div><div class="v">prod-web-01 · 10.10.12.18:22</div>
+        <div class="k">已知记录</div><div class="v">2026-08-11 保存</div>
+        <div class="k">当前动作</div><div class="v" style="color:var(--red)">连接已阻止</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="proto-note">HOST_KEY_CHANGED · 安全阻断</span>
+      <div style="display:flex;gap:7px"><button class="btn modal-close" data-close="hostKeyChangedModal">保持阻止</button><button class="btn" id="viewKeyGuide">如何核对</button><button class="btn danger" id="replaceHostKey">我已确认，更新记录…</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-layer" id="scenarioModal">
+  <div class="modal" style="width:min(720px,calc(100vw - 50px))">
+    <div class="modal-head">
+      <div class="modal-title"><strong>原型场景切换器</strong><span>只用于评审不同状态，不属于正式产品主界面</span></div>
+      <button class="icon-btn modal-close" data-close="scenarioModal"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="scenario-grid">
+        <button class="scenario-card" data-scenario="normal"><strong>正常会话</strong><span>已连接终端、标签和连接详情的标准状态。</span></button>
+        <button class="scenario-card" data-scenario="firstRun"><strong>首次使用 / 空状态</strong><span>没有任何已保存连接时的第一屏体验。</span></button>
+        <button class="scenario-card" data-scenario="connecting"><strong>连接建立中</strong><span>DNS / TCP / Host Key / Auth / Shell 分步进度。</span></button>
+        <button class="scenario-card" data-scenario="reconnecting"><strong>网络断开 / 自动重连</strong><span>保留终端内容，在顶部显示重试状态。</span></button>
+        <button class="scenario-card" data-scenario="authFailed"><strong>认证失败</strong><span>服务器可达，但密码或密钥认证未通过。</span></button>
+        <button class="scenario-card" data-scenario="timeout"><strong>连接超时</strong><span>明确定位在 TCP 层，并提供重试与检查设置。</span></button>
+        <button class="scenario-card security" data-scenario="unknownHost"><strong>首次主机指纹确认</strong><span>未知 Host Key，允许本次信任或确认后保存。</span></button>
+        <button class="scenario-card security" data-scenario="hostKeyChanged"><strong>主机指纹变化</strong><span>高风险状态：默认阻断连接，不设计快捷绕过。</span></button>
+      </div>
+    </div>
+    <div class="modal-foot"><span class="proto-note">这组入口最终不会暴露给正式用户</span><button class="btn modal-close" data-close="scenarioModal">关闭</button></div>
+  </div>
+</div>
+
+<div class="modal-layer" id="importModal">
+  <div class="modal" style="width:min(720px,calc(100vw - 50px))">
+    <div class="modal-head">
+      <div class="modal-title"><strong>从 SSH Config 导入</strong><span>先预览，再选择导入；不直接修改原文件</span></div>
+      <button class="icon-btn modal-close" data-close="importModal"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-size:10px;color:var(--muted)">检测到 <strong style="color:var(--text2)">~/.ssh/config</strong> · 3 个 Host</div>
+        <button class="btn">选择其它文件</button>
+      </div>
+      <div class="connection-steps" style="width:100%;margin:0">
+        <label class="connection-step done" style="cursor:pointer"><span class="step-mark">✓</span><span><strong style="color:var(--text2)">dev-vm</strong><br><span class="step-meta">vwanstu@192.168.56.101:22</span></span><span class="badge test">导入</span></label>
+        <label class="connection-step done" style="cursor:pointer"><span class="step-mark">✓</span><span><strong style="color:var(--text2)">prod-jump</strong><br><span class="step-meta">ops@jump.example.com:22 · ProxyJump</span></span><span class="badge prod">导入</span></label>
+        <label class="connection-step" style="cursor:pointer"><span class="step-mark"></span><span><strong style="color:var(--text2)">github.com</strong><br><span class="step-meta">git@github.com:22 · 非交互 Shell</span></span><span class="step-meta">跳过</span></label>
+      </div>
+      <div class="security-note" style="margin-top:12px">导入只复制连接参数，不复制或改写 known_hosts。私钥路径只保存引用，不把私钥内容导入应用数据库。</div>
+    </div>
+    <div class="modal-foot"><span class="proto-note">Prototype import preview</span><div style="display:flex;gap:7px"><button class="btn modal-close" data-close="importModal">取消</button><button class="btn primary" id="confirmImport">导入 2 个连接</button></div></div>
+  </div>
+</div>
+
+<div class="modal-layer" id="quickConnectModal">
+  <div class="modal" style="width:min(560px,calc(100vw - 50px))">
+    <div class="modal-head">
+      <div class="modal-title"><strong>快速连接</strong><span>临时会话默认不写入连接库</span></div>
+      <button class="icon-btn modal-close" data-close="quickConnectModal"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>SSH 地址 <small>支持 user@host:port</small></label>
+        <input id="quickAddress" value="root@10.10.12.18:22" placeholder="user@host:22">
+      </div>
+      <div style="font-size:9px;color:var(--muted);margin:-4px 0 13px">解析预览：<span style="color:var(--text2)">root</span> @ <span style="color:var(--text2)">10.10.12.18</span> · port <span style="color:var(--text2)">22</span></div>
+      <div class="auth-options">
+        <button class="auth-card active"><strong>自动</strong><span>优先 Agent / 已知密钥</span></button>
+        <button class="auth-card"><strong>密码</strong><span>本次连接时输入</span></button>
+        <button class="auth-card"><strong>选择私钥</strong><span>仅引用本地文件</span></button>
+      </div>
+      <div class="form-section">
+        <div class="setting-row"><div class="setting-copy"><strong>连接成功后保存为连接</strong><span>默认关闭，保持快速连接的一次性语义</span></div><div class="switch" id="saveQuickSwitch"></div></div>
+      </div>
+      <div style="margin-top:5px">
+        <div class="detail-label">最近使用</div>
+        <div class="tags"><button class="tag" style="cursor:pointer">ubuntu@172.16.8.35</button><button class="tag" style="cursor:pointer">vwanstu@192.168.56.101</button></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="proto-note">Prototype only · 不建立真实 SSH 连接</span>
+      <div style="display:flex;gap:7px"><button class="btn modal-close" data-close="quickConnectModal">取消</button><button class="btn primary" id="startQuickConnect">连接一次</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast">Prototype interaction</div>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const htmlEl=document.documentElement;
+const toast=$('#toast');
+let selectedHost='prod-web-01';
+let bulkMode=false;
+
+function showToast(msg){
+  toast.textContent=msg;toast.classList.add('show');
+  clearTimeout(window.__t);window.__t=setTimeout(()=>toast.classList.remove('show'),1800);
+}
+function showModal(id){$('#'+id).classList.add('show')}
+function hideModal(id){$('#'+id).classList.remove('show')}
+function closePopovers(){ $$('.popover').forEach(p=>p.classList.remove('show')); }
+function placePopover(pop,anchor,side='right'){
+  const r=anchor.getBoundingClientRect();pop.classList.add('show');
+  const pr=pop.getBoundingClientRect();
+  let left=side==='left'?r.left-pr.width:r.right+7;
+  let top=Math.min(r.top,window.innerHeight-pr.height-10);
+  left=Math.max(8,Math.min(left,window.innerWidth-pr.width-8));top=Math.max(8,top);
+  pop.style.left=left+'px';pop.style.top=top+'px';
+}
+function openConnection(edit=false,temp=false){
+  $('#connectionModalTitle').textContent=temp?'临时快速连接':(edit?'编辑 SSH 连接':'新建 SSH 连接');
+  $('#saveConnection').textContent=temp?'连接一次':'保存连接';
+  showModal('connectionModal');
+}
+function toggleSplit(force){
+  const grid=$('#terminalGrid'), pane=$('#splitPane');
+  const on=typeof force==='boolean'?force:!grid.classList.contains('split');
+  grid.classList.toggle('split',on);pane.classList.toggle('hidden',!on);
+  showToast(on?'已在原型中拆分终端':'已关闭拆分终端');
+}
+function updateBulkCount(){
+  const count=$$('.host.bulk-selected').length;
+  $('#bulkCount').textContent=count;
+  $('#sideSub').textContent=bulkMode?(count+' 个已选 · 单击切换选择'):'8 个主机 · 2 个活动会话';
+}
+function setBulkMode(on){
+  bulkMode=on;
+  $('#connectionList').classList.toggle('bulk-mode',on);
+  $('#batchModeBtn').classList.toggle('emphasis',on);
+  $('#normalSideFoot').classList.toggle('hidden',on);
+  $('#bulkBar').classList.toggle('show',on);
+  if(!on) $$('.host.bulk-selected').forEach(h=>h.classList.remove('bulk-selected'));
+  updateBulkCount();
+}
+function setSessionVisual(status,label,meta){
+  const dot=$('.tab[data-tab="prod"] .status-dot');
+  dot.className='status-dot '+status;
+  $('.tab[data-tab="prod"] .tab-title').textContent=label;
+  const pill=$('.session-pill');
+  pill.innerHTML='<span class="status-dot '+status+'"></span>'+meta;
+}
+function setScenario(name){
+  ['connectingState','authFailedState','timeoutState'].forEach(id=>$('#'+id).classList.remove('show'));
+  $('#reconnectBanner').classList.remove('show');
+  $('#firstRunState').classList.remove('show');
+  $('#detailPanel').classList.remove('open');
+  document.body.classList.remove('first-run-mode');
+  if($('#sideSub')) $('#sideSub').textContent='8 个主机 · 2 个活动会话';
+  if(name==='normal'){
+    setSessionVisual('online','prod-web-01','已连接');
+    $('.session-meta').textContent='root@10.10.12.18:22 · SSH 2.0 · 38 ms';
+  }else if(name==='firstRun'){
+    document.body.classList.add('first-run-mode');
+    $('#sideSub').textContent='还没有已保存的连接';
+    $('#firstRunState').classList.add('show');
+  }else if(name==='connecting'){
+    $('#connectingState').classList.add('show');
+    setSessionVisual('warn','prod-web-01 · 连接中','连接中');
+  }else if(name==='reconnecting'){
+    $('#reconnectBanner').classList.add('show');
+    setSessionVisual('warn','prod-web-01 · 重连中','重连中');
+    $('.session-meta').textContent='root@10.10.12.18:22 · 会话输出已保留';
+  }else if(name==='authFailed'){
+    $('#authFailedState').classList.add('show');
+    setSessionVisual('error','prod-web-01 · 认证失败','认证失败');
+  }else if(name==='timeout'){
+    $('#timeoutState').classList.add('show');
+    setSessionVisual('error','prod-web-01 · 连接失败','连接失败');
+  }else if(name==='unknownHost'){
+    showModal('hostKeyModal');
+  }else if(name==='hostKeyChanged'){
+    showModal('hostKeyChangedModal');
+  }
+}
+
+$('#batchModeBtn').onclick=()=>setBulkMode(!bulkMode);
+$('#newConnection').onclick=()=>openConnection(false);
+$('#tabAdd').onclick=()=>openConnection(false);
+$('#quickAction').onclick=()=>showModal('quickConnectModal');
+$('#editConnection').onclick=()=>openConnection(true);
+$('#settingsButton').onclick=()=>showModal('settingsModal');
+$('#openAppearance').onclick=()=>{closePopovers();showModal('settingsModal')};
+$$('.modal-close').forEach(b=>b.onclick=()=>hideModal(b.dataset.close));
+$$('.modal-layer').forEach(layer=>layer.addEventListener('mousedown',e=>{if(e.target===layer) layer.classList.remove('show')}));
+$$('.switch').forEach(s=>s.onclick=()=>s.classList.toggle('on'));
+
+$$('.form-tab').forEach(t=>t.onclick=()=>{
+  $$('.form-tab').forEach(x=>x.classList.remove('active'));t.classList.add('active');
+  $$('.form-page').forEach(p=>p.classList.toggle('hidden',p.dataset.page!==t.dataset.form));
+});
+$$('.auth-card:not(.theme-choice)').forEach(c=>c.onclick=()=>{
+  c.parentElement.querySelectorAll('.auth-card').forEach(x=>x.classList.remove('active'));c.classList.add('active');
+});
+$$('[data-network-mode]').forEach(c=>c.addEventListener('click',()=>{
+  const mode=c.dataset.networkMode;
+  $('#networkDirectPanel').classList.toggle('hidden',mode!=='direct');
+  $('#networkJumpPanel').classList.toggle('hidden',mode!=='jump');
+  $('#networkSocksPanel').classList.toggle('hidden',mode!=='socks');
+}));
+$('#saveConnection').onclick=()=>{hideModal('connectionModal');showToast($('#saveConnection').textContent==='连接一次'?'原型：发起一次临时连接':'原型：连接配置已保存')};
+
+$('#scenarioButton').onclick=()=>showModal('scenarioModal');
+$$('[data-scenario]').forEach(b=>b.onclick=()=>{
+  const name=b.dataset.scenario;
+  const layer=b.closest('.modal-layer'); if(layer) layer.classList.remove('show');
+  setScenario(name);
+});
+$('#retryNow').onclick=()=>{setScenario('connecting');showToast('原型：立即开始下一次重连')};
+$('#stopRetry').onclick=()=>{setScenario('normal');setSessionVisual('offline','prod-web-01 · 已断开','已断开');showToast('原型：已停止自动重连')};
+$('#retryAuth').onclick=()=>{setScenario('connecting');showToast('原型：使用新认证信息重新尝试')};
+$('#editAuthFromError').onclick=()=>{setScenario('normal');openConnection(true);$$('.form-tab').find(x=>x.dataset.form==='auth')?.click()};
+$('#retryTimeout').onclick=()=>{setScenario('connecting');showToast('原型：重新建立网络连接')};
+$('#editNetworkFromError').onclick=()=>{setScenario('normal');openConnection(true);$$('.form-tab').find(x=>x.dataset.form==='network')?.click()};
+
+$('#copyFingerprint').onclick=()=>showToast('原型：已复制主机指纹');
+$('#trustOnce').onclick=()=>{hideModal('hostKeyModal');setScenario('connecting');showToast('原型：仅本次会话信任该主机')};
+$('#trustSave').onclick=()=>{hideModal('hostKeyModal');setScenario('connecting');showToast('原型：保存主机指纹后继续连接')};
+$('#viewKeyGuide').onclick=()=>showToast('设计：引导用户从服务器控制台或管理员渠道核对指纹');
+$('#replaceHostKey').onclick=()=>{hideModal('hostKeyChangedModal');showToast('原型：进入二次确认后才允许更新已知主机记录')};
+
+$('#firstNew').onclick=()=>{setScenario('normal');openConnection(false)};
+$('#firstImport').onclick=()=>{setScenario('normal');showModal('importModal')};
+$('#firstQuick').onclick=()=>{setScenario('normal');showModal('quickConnectModal')};
+$('#confirmImport').onclick=()=>{hideModal('importModal');showToast('原型：已导入 2 个连接，不改写 SSH Config')};
+$('#startQuickConnect').onclick=()=>{
+  const save=$('#saveQuickSwitch').classList.contains('on');
+  const target=$('#quickAddress').value.trim()||'临时主机';
+  $('#connectingTitle').textContent='正在连接 '+target;
+  hideModal('quickConnectModal');
+  setScenario('connecting');
+  showToast(save?'原型：连接成功后再询问连接名称并保存':'原型：建立一次性临时 SSH 会话');
+};
+
+$$('.host[data-host]').forEach(host=>{
+  host.addEventListener('click',e=>{
+    if(e.target.closest('.host-more')){
+      selectedHost=host.dataset.host;placePopover($('#hostPopover'),e.target.closest('.host-more'),'left');e.stopPropagation();return;
+    }
+    if(bulkMode){
+      host.classList.toggle('bulk-selected');
+      updateBulkCount();
+      return;
+    }
+    $$('.host[data-host]').forEach(x=>x.classList.remove('selected'));host.classList.add('selected');selectedHost=host.dataset.host;
+  });
+  host.addEventListener('dblclick',()=>{
+    if(bulkMode) return;
+    if(host.dataset.host==='qa-linux'){ showModal('hostKeyModal'); return; }
+    if(host.dataset.host==='db-primary'){ $('#connectingTitle').textContent='正在连接 db-primary'; setScenario('connecting'); return; }
+    showToast('原型：打开 '+host.dataset.host+' 的新 SSH 会话');
+  });
+});
+$('#hostOpen').onclick=()=>{closePopovers();showToast('原型：打开 '+selectedHost+' 的新 SSH 会话')};
+$('#hostDetails').onclick=()=>{closePopovers();$('#detailPanel').classList.add('open')};
+$('#hostDuplicate').onclick=()=>{closePopovers();openConnection(false);$('#connectionModalTitle').textContent='复制 SSH 连接';showToast('原型：复制现有配置，名称需要另行确认')};
+$('#hostMove').onclick=()=>{closePopovers();$('#moveGroupText').textContent='将 '+selectedHost+' 移动到目标分组。连接参数不会改变。';showModal('moveGroupModal')};
+$('#hostEdit').onclick=()=>{closePopovers();openConnection(true)};
+$('#hostDelete').onclick=()=>{closePopovers();$('#deleteConnectionTitle').textContent='删除 '+selectedHost+'？';showModal('deleteConnectionModal')};
+$('#detailButton').onclick=()=>$('#detailPanel').classList.toggle('open');
+$('#closeDetail').onclick=()=>$('#detailPanel').classList.remove('open');
+$('#copyHost').onclick=()=>showToast('原型：已复制 root@10.10.12.18:22');
+$('#reconnect').onclick=()=>showToast('原型：重新连接当前会话');
+$('#splitButton').onclick=()=>toggleSplit();
+$('#disconnectButton').onclick=()=>showModal('confirmModal');
+$('#confirmDisconnect').onclick=()=>{hideModal('confirmModal');showToast('原型：会话已断开，输出仍保留')};
+
+$('#themeButton').onclick=e=>{closePopovers();placePopover($('#themePopover'),e.currentTarget,'right')};
+$$('.theme-choice').forEach(b=>b.onclick=()=>{
+  htmlEl.dataset.theme=b.dataset.theme;
+  $$('.theme-choice.auth-card').forEach(x=>x.classList.toggle('active',x.dataset.theme===b.dataset.theme));
+  if(b.closest('.popover')) closePopovers();
+});
+$$('.density-choice').forEach(b=>b.onclick=()=>{htmlEl.dataset.density=b.dataset.density;closePopovers()});
+
+$('#commandLauncher').onclick=()=>{showModal('paletteModal');setTimeout(()=>$('#paletteInput').focus(),30)};
+$('#paletteNew').onclick=()=>{hideModal('paletteModal');openConnection(false)};
+$('#paletteSplit').onclick=()=>{hideModal('paletteModal');toggleSplit(true)};
+$('#paletteTheme').onclick=()=>{hideModal('paletteModal');placePopover($('#themePopover'),$('#themeButton'),'right')};
+
+$('#hostSearch').addEventListener('input',e=>{
+  const q=e.target.value.trim().toLowerCase();
+  let visible=0;
+  $$('.host[data-search]').forEach(h=>{
+    const show=!q||h.dataset.search.toLowerCase().includes(q);
+    h.classList.toggle('hidden',!show);
+    if(show) visible++;
+  });
+  $('#noSearchResults').classList.toggle('show',!!q&&visible===0);
+});
+$('#filterButton').onclick=e=>{closePopovers();placePopover($('#filterPopover'),e.currentTarget,'right')};
+$$('.filter-option').forEach(b=>b.onclick=()=>{
+  const f=b.dataset.filter;
+  let visible=0;
+  $$('.host[data-search]').forEach(h=>{
+    const dot=h.querySelector('.status-dot');
+    const show=f==='all'||(f==='online'&&dot?.classList.contains('online'))||(f==='attention'&&dot?.classList.contains('warn'))||(f==='offline'&&dot?.classList.contains('offline'));
+    h.classList.toggle('hidden',!show); if(show) visible++;
+  });
+  $('#noSearchResults').classList.toggle('show',visible===0);
+  closePopovers();showToast(f==='all'?'已清除状态筛选':'原型：已应用连接状态筛选');
+});
+$('#clearFilters').onclick=()=>{$$('.host[data-search]').forEach(h=>h.classList.remove('hidden'));$('#noSearchResults').classList.remove('show');closePopovers();showToast('已清除所有筛选')};
+$('#collapseGroups').onclick=()=>{
+  $$('.group .host[data-host]').forEach(h=>h.classList.toggle('hidden'));
+  showToast('原型：切换分组折叠状态');
+};
+
+$$('[data-nav]').forEach(b=>b.onclick=()=>{
+  $$('[data-nav]').forEach(x=>x.classList.remove('active'));b.classList.add('active');
+  const nav=b.dataset.nav;
+  $('#connectionList').classList.toggle('hidden',nav!=='connections');
+  $('#sessionList').classList.toggle('hidden',nav!=='sessions');
+  $('#snippetList').classList.toggle('hidden',nav!=='snippets');
+  const title={connections:'连接',sessions:'会话',snippets:'命令片段'}[nav];
+  const sub={connections:'8 个主机 · 2 个活动会话',sessions:'2 个活动 · 2 个最近关闭',snippets:'4 个常用片段 · 仅插入不执行'}[nav];
+  $('#sideTitle').textContent=title;$('#sideSub').textContent=sub;
+  $('#hostSearch').placeholder=nav==='connections'?'搜索名称、地址、用户或标签':nav==='sessions'?'搜索会话':'搜索命令片段';
+});
+
+$$('.tab').forEach(tab=>tab.onclick=e=>{
+  if(e.target.closest('.tab-close')){e.stopPropagation();showModal('confirmModal');return}
+  $$('.tab').forEach(x=>x.classList.remove('active'));tab.classList.add('active');
+  if(tab.dataset.tab==='staging'){ setScenario('reconnecting'); } else { setScenario('normal'); showToast('已切换会话'); }
+});
+$('#sessionMore').onclick=e=>{closePopovers();placePopover($('#sessionPopover'),e.currentTarget,'left')};
+$('#tabsMore').onclick=e=>{closePopovers();placePopover($('#tabsPopover'),e.currentTarget,'left')};
+$('#menuReconnect').onclick=()=>{closePopovers();setScenario('connecting')};
+$('#menuDisconnect').onclick=()=>{closePopovers();showModal('confirmModal')};
+$('#sideMore').onclick=e=>{closePopovers();placePopover($('#libraryPopover'),e.currentTarget,'right')};
+$('#manageGroups').onclick=()=>{closePopovers();showModal('groupManagerModal')};
+$('#importFromLibrary').onclick=()=>{closePopovers();showModal('importModal')};
+$('#addGroupButton').onclick=()=>showToast('原型：新增分组后出现在连接列表中');
+$('#confirmMoveGroup').onclick=()=>{hideModal('moveGroupModal');showToast('原型：连接已移动到目标分组')};
+$('#confirmDeleteConnection').onclick=()=>{hideModal('deleteConnectionModal');showToast('原型：Connection Profile 已删除')};
+$('#bulkMove').onclick=()=>{if(!$$('.host.bulk-selected').length){showToast('请先选择连接');return} showModal('moveGroupModal')};
+$('#bulkTag').onclick=()=>showToast('原型：为已选连接批量添加 / 移除标签');
+$('#bulkFavorite').onclick=()=>showToast('原型：切换已选连接的收藏状态');
+$('#bulkDelete').onclick=()=>{
+  const n=$$('.host.bulk-selected').length;
+  if(!n){showToast('请先选择连接');return}
+  $('#deleteConnectionTitle').textContent='删除 '+n+' 个连接？';
+  $('#deleteConnectionText').textContent='批量删除只影响本地 Connection Profile。任何已存在的活动会话仍独立保留。';
+  showModal('deleteConnectionModal');
+};
+
+document.addEventListener('mousedown',e=>{
+  if(!e.target.closest('.popover')&&!e.target.closest('#themeButton')&&!e.target.closest('.host-more')) closePopovers();
+});
+document.addEventListener('keydown',e=>{
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();showModal('paletteModal');setTimeout(()=>$('#paletteInput').focus(),30)}
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='n'){e.preventDefault();openConnection(false)}
+  if(e.key==='Escape'){$$('.modal-layer.show').forEach(m=>m.classList.remove('show'));closePopovers();$('#detailPanel').classList.remove('open')}
+  if(e.key==='Enter'&&document.activeElement?.classList.contains('host')) showToast('原型：打开所选主机的新会话');
+});
+</script>
+</body>
+</html>

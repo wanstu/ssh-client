@@ -1,0 +1,18 @@
+# Wails generated/build output
+cmd/ssh-client-desktop/build/bin/
+cmd/ssh-client-desktop/build/appicon.png
+cmd/ssh-client-desktop/build/windows/icon.ico
+cmd/ssh-client-desktop/frontend/wailsjs/
+dist/
+
+# Go
+*.exe
+*.test
+*.out
+
+# Editors
+.idea/
+.vscode/
+
+# Local runtime data
+.local/

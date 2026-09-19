@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    uses: wanstu/wails-desktop-kit/.github/workflows/wails-desktop.yml@v0.4.0
+    with:
+      app-name: ssh-client
+      desktop-dir: cmd/ssh-client-desktop
+      test-command: ""
+      vet-command: ""
+      build-command-windows: ./scripts/build.ps1
+      build-command-unix: bash ./scripts/build.sh

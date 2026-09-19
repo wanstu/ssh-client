@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="zh-CN" data-dk-theme="dark" data-dk-theme-pack="aurora">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SSH Client</title>
+  <link rel="stylesheet" href="/desktopkit/tokens.css">
+  <link rel="stylesheet" href="/desktopkit/base.css">
+  <link rel="stylesheet" href="/desktopkit/components.css">
+  <link rel="stylesheet" href="/desktopkit/navigation.css">
+  <link rel="stylesheet" href="styles.css">
+  <script src="/desktopkit/theme.js"></script>
+</head>
+<body>
+<div class="app-shell">
+  <nav class="rail" aria-label="主导航">
+    <div class="rail-top">
+      <div class="brand-mark" title="SSH Client">&gt;_</div>
+      <button class="rail-button is-active" data-nav="connections" title="连接">▣</button>
+      <button class="rail-button" data-nav="sessions" title="会话">▤</button>
+      <button class="rail-button" data-nav="snippets" title="命令片段">&lt;/&gt;</button>
+    </div>
+    <div class="rail-bottom">
+      <button id="quickConnectButton" class="rail-button" title="快速连接">⚡</button>
+      <button id="settingsButton" class="rail-button" title="设置">⚙</button>
+    </div>
+  </nav>
+
+  <aside class="connection-sidebar">
+    <header class="sidebar-header">
+      <div>
+        <strong id="sidebarTitle">连接</strong>
+        <small id="sidebarMeta">读取中</small>
+      </div>
+      <div class="sidebar-header-actions">
+        <button id="importConfigButton" class="dk-button dk-button-secondary compact-button" type="button" title="从 SSH Config 导入">⇩</button>
+        <button id="newProfileButton" class="dk-button dk-button-primary compact-button" type="button" title="新建连接">＋</button>
+      </div>
+    </header>
+    <div class="sidebar-search">
+      <input id="connectionSearch" type="search" placeholder="搜索名称、地址、用户或标签">
+    </div>
+    <div id="connectionList" class="connection-list"></div>
+    <footer class="sidebar-footer">
+      <span id="runtimeSummary">本地配置</span>
+      <button id="refreshButton" class="dk-button dk-button-ghost compact-button" type="button">刷新</button>
+    </footer>
+  </aside>
+
+  <main class="workspace">
+    <header class="workspace-topbar">
+      <div class="command-launcher">
+        <span>⌕</span>
+        <button id="commandButton" type="button">搜索连接、切换会话或快速连接…</button>
+        <kbd>Ctrl K</kbd>
+      </div>
+    </header>
+
+    <div id="sessionTabs" class="session-tabs"></div>
+
+    <section class="terminal-stage">
+      <div id="emptyState" class="welcome-state">
+        <div class="welcome-icon">&gt;_</div>
+        <h1>开始 SSH 会话</h1>
+        <p>从左侧双击一个连接，或使用快速连接。连接资料保存在本机；密码和私钥口令不会写入普通配置文件。</p>
+        <div class="welcome-actions">
+          <button id="welcomeNewButton" class="dk-button dk-button-primary" type="button">新建连接</button>
+          <button id="welcomeQuickButton" class="dk-button dk-button-secondary" type="button">快速连接</button>
+        </div>
+      </div>
+
+      <div id="sessionView" class="session-view is-hidden">
+        <div class="session-toolbar">
+          <div class="session-identity">
+            <strong id="activeSessionName">—</strong>
+            <span id="activeSessionStatus" class="dk-status-pill">—</span>
+            <span id="activeSessionTarget" class="session-target">—</span>
+          </div>
+          <div class="session-actions">
+            <button id="retrySessionButton" class="dk-button dk-button-secondary compact-button is-hidden" type="button">立即重试</button>
+            <button id="disconnectSessionButton" class="dk-button dk-button-secondary compact-button" type="button">断开</button>
+            <button id="closeSessionButton" class="dk-button dk-button-ghost compact-button" type="button">关闭标签</button>
+          </div>
+        </div>
+        <div id="sessionBanner" class="session-banner is-hidden"></div>
+        <div id="terminalViewport" class="terminal-viewport" tabindex="0" aria-label="SSH 终端">
+          <pre id="terminalText" class="terminal-text"></pre>
+          <div id="terminalCursor" class="terminal-cursor"></div>
+        </div>
+        <footer class="terminal-statusbar">
+          <span id="terminalStateText">SSH</span>
+          <span id="terminalSizeText">80 × 24</span>
+          <span>UTF-8</span>
+        </footer>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog id="commandDialog" class="dk-dialog command-dialog">
+  <div class="command-palette">
+    <div class="command-search-row">
+      <span>⌕</span>
+      <input id="commandSearch" autocomplete="off" placeholder="搜索连接、会话或操作…">
+      <kbd>Esc</kbd>
+    </div>
+    <div id="commandResults" class="command-results"></div>
+    <div class="command-footer">
+      <span>↑↓ 选择</span>
+      <span>Enter 执行</span>
+      <span>Ctrl K 打开</span>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="profileDialog" class="dk-dialog profile-dialog">
+  <form id="profileForm" class="dk-stack">
+    <div class="dialog-heading">
+      <div><h2 id="profileDialogTitle">新建 SSH 连接</h2><p>连接资料不包含密码或私钥口令。</p></div>
+      <button id="profileCloseButton" class="dk-button dk-button-ghost compact-button" type="button" aria-label="关闭">×</button>
+    </div>
+    <input id="profileId" type="hidden">
+    <div class="dk-form-grid">
+      <label class="dk-field is-span-2">连接名称<input id="profileName" autocomplete="off" required placeholder="例如：prod-web-01"></label>
+      <label class="dk-field">主机地址<input id="profileHost" autocomplete="off" required placeholder="10.10.12.18"></label>
+      <label class="dk-field">端口<input id="profilePort" type="number" min="1" max="65535" value="22" required></label>
+      <label class="dk-field">用户名<input id="profileUsername" autocomplete="username" required placeholder="root"></label>
+      <div class="dk-field">
+        <label for="profileGroup">分组</label>
+        <div class="field-with-action">
+          <select id="profileGroup"></select>
+          <button id="manageGroupsButton" class="dk-button dk-button-secondary compact-button" type="button">管理</button>
+        </div>
+      </div>
+      <label class="dk-field">认证方式
+        <select id="profileAuthMode">
+          <option value="auto">Auto / SSH Agent</option>
+          <option value="password">密码</option>
+          <option value="private_key">SSH 私钥</option>
+          <option value="ssh_agent">SSH Agent</option>
+        </select>
+      </label>
+      <label class="dk-field" id="privateKeyField">私钥路径
+        <div class="field-with-action">
+          <input id="profilePrivateKey" autocomplete="off" placeholder="~/.ssh/id_ed25519">
+          <button id="choosePrivateKeyButton" class="dk-button dk-button-secondary compact-button" type="button">选择</button>
+        </div>
+      </label>
+      <div id="savedPasswordRow" class="saved-credential-row is-span-2 is-hidden">
+        <span><strong>密码已安全保存</strong><small>密码不在 settings.json 中；只保存 credential_ref。</small></span>
+        <button id="clearSavedPasswordButton" class="dk-button dk-button-secondary compact-button" type="button">清除保存密码</button>
+      </div>
+      <label class="dk-field is-span-2">标签<input id="profileTags" autocomplete="off" placeholder="Web, Linux, 生产环境"></label>
+    </div>
+    <label class="dk-setting-row">
+      <span><strong>加入收藏</strong><small>收藏与分组是两个独立维度。</small></span>
+      <input id="profileFavorite" class="dk-switch" type="checkbox">
+    </label>
+    <div id="profileError" class="dk-message is-error is-hidden"></div>
+    <div class="dialog-actions">
+      <button id="deleteProfileButton" class="dk-button dk-button-danger push-left is-hidden" type="button">删除连接</button>
+      <button id="profileCancelButton" class="dk-button dk-button-secondary" type="button">取消</button>
+      <button id="saveProfileButton" class="dk-button dk-button-primary" type="submit">保存连接</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="groupDialog" class="dk-dialog compact-dialog">
+  <div class="dk-stack">
+    <div class="dialog-heading">
+      <div><h2>管理分组</h2><p>分组只负责整理连接。删除分组不会删除连接，连接会回到“未分组”。</p></div>
+      <button id="groupCloseButton" class="dk-button dk-button-ghost compact-button" type="button" aria-label="关闭">×</button>
+    </div>
+    <div class="group-create-row">
+      <label class="dk-field">新建分组
+        <input id="newGroupName" autocomplete="off" placeholder="例如：生产环境">
+      </label>
+      <button id="createGroupButton" class="dk-button dk-button-primary" type="button">新建</button>
+    </div>
+    <div id="groupList" class="group-manage-list"></div>
+    <div id="groupError" class="dk-message is-error is-hidden"></div>
+    <div class="dialog-actions">
+      <button id="groupDoneButton" class="dk-button dk-button-primary" type="button">完成</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="credentialsDialog" class="dk-dialog compact-dialog">
+  <form id="credentialsForm" class="dk-stack">
+    <div class="dialog-heading">
+      <div><h2 id="credentialsTitle">连接认证</h2><p id="credentialsHint">本次认证信息只保存在内存中。按 Enter 可直接连接。</p></div>
+      <button id="credentialsCloseButton" class="dk-button dk-button-ghost compact-button" type="button">×</button>
+    </div>
+    <label id="passwordField" class="dk-field">密码<input id="connectPassword" type="password" autocomplete="current-password"></label>
+    <label id="rememberPasswordRow" class="dk-setting-row">
+      <span><strong>保存密码</strong><small>使用 Desktop Kit Secure Config 加密保存，主密钥由系统安全凭据库托管。</small></span>
+      <input id="rememberPassword" class="dk-switch" type="checkbox">
+    </label>
+    <label id="passphraseField" class="dk-field">私钥口令（可选）<input id="connectPassphrase" type="password" autocomplete="off"></label>
+    <div id="credentialsError" class="dk-message is-error is-hidden"></div>
+    <div class="dialog-actions">
+      <button id="credentialsCancelButton" class="dk-button dk-button-secondary" type="button">取消</button>
+      <button id="credentialsConnectButton" class="dk-button dk-button-primary" type="submit">连接</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="quickDialog" class="dk-dialog compact-dialog">
+  <form class="dk-stack" method="dialog">
+    <div class="dialog-heading">
+      <div><h2>快速连接</h2><p>默认只建立一次会话，不写入连接库。</p></div>
+      <button class="dk-button dk-button-ghost compact-button" value="cancel" type="submit">×</button>
+    </div>
+    <label class="dk-field">SSH 地址<input id="quickAddress" autocomplete="off" placeholder="root@example.com:22"></label>
+    <label class="dk-field">认证方式
+      <select id="quickAuthMode">
+        <option value="auto">Auto / SSH Agent</option>
+        <option value="password">密码</option>
+        <option value="private_key">SSH 私钥</option>
+      </select>
+    </label>
+    <label id="quickPasswordField" class="dk-field is-hidden">密码<input id="quickPassword" type="password" autocomplete="current-password"></label>
+    <label id="quickKeyField" class="dk-field is-hidden">私钥路径<input id="quickPrivateKey" autocomplete="off" placeholder="~/.ssh/id_ed25519"></label>
+    <label id="quickPassphraseField" class="dk-field is-hidden">私钥口令（可选）<input id="quickPassphrase" type="password"></label>
+    <label class="dk-setting-row">
+      <span><strong>连接成功后保存为连接</strong><small>关闭时保持一次性语义。</small></span>
+      <input id="quickSave" class="dk-switch" type="checkbox">
+    </label>
+    <div id="quickError" class="dk-message is-error is-hidden"></div>
+    <div class="dialog-actions">
+      <button class="dk-button dk-button-secondary" value="cancel" type="submit">取消</button>
+      <button id="quickStartButton" class="dk-button dk-button-primary" type="button">连接一次</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="importDialog" class="dk-dialog import-dialog">
+  <div class="dk-stack">
+    <div class="dialog-heading">
+      <div><h2>从 SSH Config 导入</h2><p>先预览再选择；不会修改原文件、known_hosts 或复制私钥内容。</p></div>
+      <button id="closeImportButton" class="dk-button dk-button-ghost compact-button" type="button">×</button>
+    </div>
+    <div class="import-source-row">
+      <label class="dk-field">SSH Config 文件
+        <input id="importConfigPath" autocomplete="off" placeholder="默认 ~/.ssh/config">
+      </label>
+      <button id="chooseConfigButton" class="dk-button dk-button-secondary" type="button">选择文件</button>
+      <button id="previewConfigButton" class="dk-button dk-button-primary" type="button">预览</button>
+    </div>
+    <div id="importWarnings" class="dk-message is-hidden"></div>
+    <div id="importEntries" class="import-entries">
+      <div class="dk-empty-state"><div><strong>尚未读取 SSH Config</strong><p>点击“预览”读取 Host 条目。</p></div></div>
+    </div>
+    <div id="importError" class="dk-message is-error is-hidden"></div>
+    <div class="dialog-actions">
+      <span id="importSelectionSummary" class="dialog-summary">0 个已选</span>
+      <button id="cancelImportButton" class="dk-button dk-button-secondary" type="button">取消</button>
+      <button id="confirmImportButton" class="dk-button dk-button-primary" type="button" disabled>导入所选连接</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="hostKeyDialog" class="dk-dialog compact-dialog">
+  <div class="dk-stack">
+    <div class="security-heading">
+      <div class="security-icon">◆</div>
+      <div><h2 id="hostKeyTitle">确认主机身份</h2><p id="hostKeyDescription"></p></div>
+    </div>
+    <div class="fingerprint-box">
+      <small>当前指纹</small>
+      <code id="hostKeyFingerprint"></code>
+    </div>
+    <div id="previousFingerprintBox" class="fingerprint-box is-hidden">
+      <small>之前保存的指纹</small>
+      <code id="hostKeyPreviousFingerprint"></code>
+    </div>
+    <div id="hostKeyWarning" class="dk-message"></div>
+    <div id="hostKeyActions" class="dialog-actions"></div>
+  </div>
+</dialog>
+
+<dialog id="settingsDialog" class="dk-dialog compact-dialog">
+  <form class="dk-stack" method="dialog">
+    <div class="dialog-heading">
+      <div><h2>设置</h2><p>产品选择由 SSH Client 保存，主题实现机制由 Desktop Kit 提供。</p></div>
+      <button class="dk-button dk-button-ghost compact-button" value="cancel" type="submit">×</button>
+    </div>
+    <label class="dk-field">主题模式
+      <select id="themeMode">
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+        <option value="system">跟随系统</option>
+      </select>
+    </label>
+    <label class="dk-field">主题包
+      <select id="themeVariant"></select>
+      <small id="themePackDescription">由 Wails Desktop Kit Theme 提供。</small>
+    </label>
+    <div class="settings-path-row">
+      <span><strong>配置目录</strong><small>由 Desktop Kit paths 统一管理。</small></span>
+      <code id="configDirPath">~/.config/ssh-client</code>
+    </div>
+    <label class="dk-setting-row">
+      <span><strong>开机启动</strong><small>由 Wails Desktop Kit 的 autostart 管理。</small></span>
+      <input id="launchAtLogin" class="dk-switch" type="checkbox">
+    </label>
+    <div class="dialog-actions">
+      <button class="dk-button dk-button-secondary" value="cancel" type="submit">关闭</button>
+      <button id="saveSettingsButton" class="dk-button dk-button-primary" type="button">保存设置</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

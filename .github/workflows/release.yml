@@ -1,0 +1,21 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: wanstu/wails-desktop-kit/.github/workflows/wails-desktop.yml@v0.4.0
+    with:
+      app-name: ssh-client
+      desktop-dir: cmd/ssh-client-desktop
+      test-command: ""
+      vet-command: ""
+      build-command-windows: ./scripts/build.ps1
+      build-command-unix: bash ./scripts/build.sh
+      publish-release: true
