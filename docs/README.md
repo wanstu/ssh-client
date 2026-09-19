@@ -1,6 +1,6 @@
 # SSH Client 文档入口
 
-> 本目录是 SSH Client 的产品与开发契约。项目已从 Product Prototype 进入首个真实实现阶段：具备 Wails 桌面壳、Connection Profile、本地持久化、真实 Direct SSH、Host Key 校验、Session、终端交互、SSH Config 导入、Kit Theme Pack 与 Secure Config。
+> 本目录是 SSH Client 的产品与开发契约。项目已从 Product Prototype 进入首个真实实现阶段：具备 Wails 桌面壳、Connection Profile、本地持久化、真实 Direct SSH、Host Key 校验、Session、终端交互、SSH Config 导入、Kit Runtime Theme 与 Secure Config。
 
 ## 文档地图
 
@@ -31,6 +31,6 @@
 
 ## 文档状态
 
-- 当前版本：v0.1.0
+- 当前版本：v0.2.0
 - 日期：2026-09-19
 - 状态：首个可用版本；产品原型继续作为 UX 参考，不代表所有后续功能已经实现

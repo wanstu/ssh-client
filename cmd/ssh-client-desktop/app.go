@@ -14,21 +14,13 @@ import (
 	"github.com/wanstu/ssh-client/internal/model"
 	"github.com/wanstu/ssh-client/internal/sshclient"
 	"github.com/wanstu/ssh-client/internal/sshconfig"
-	theme "github.com/wanstu/wails-desktop-kit-theme"
 	kitautostart "github.com/wanstu/wails-desktop-kit/autostart"
 	"github.com/wanstu/wails-desktop-kit/secureconfig"
 )
 
-type ThemePackOption struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	Description string `json:"description"`
-}
-
 type UIState struct {
 	Settings               model.Settings              `json:"settings"`
 	Sessions               []sshclient.SessionSnapshot `json:"sessions"`
-	ThemePacks             []ThemePackOption           `json:"theme_packs"`
 	LaunchAtLoginSupported bool                        `json:"launch_at_login_supported"`
 	LaunchAtLogin          bool                        `json:"launch_at_login"`
 	DataDir                string                      `json:"data_dir"`
@@ -197,19 +189,9 @@ func (a *App) GetState() (UIState, error) {
 	if err != nil {
 		return UIState{}, err
 	}
-	packs := theme.Packs()
-	themePacks := make([]ThemePackOption, 0, len(packs))
-	for _, pack := range packs {
-		themePacks = append(themePacks, ThemePackOption{
-			Name:        pack.Name,
-			DisplayName: pack.DisplayName,
-			Description: pack.Description,
-		})
-	}
 	return UIState{
 		Settings:               settings,
 		Sessions:               a.sessions.Sessions(),
-		ThemePacks:             themePacks,
 		LaunchAtLoginSupported: a.launchAtLogin.Supported(),
 		LaunchAtLogin:          enabled,
 		DataDir:                a.store.Dir(),
@@ -227,9 +209,6 @@ func (a *App) SetLaunchAtLogin(value bool) (UIState, error) {
 }
 
 func (a *App) SetTheme(themeSetting model.ThemeSettings) (UIState, error) {
-	if _, ok := theme.Lookup(themeSetting.Variant); !ok {
-		return UIState{}, fmt.Errorf("未知主题包 %q", themeSetting.Variant)
-	}
 	_, err := a.store.Update(func(settings *model.Settings) error {
 		settings.Theme = themeSetting
 		return settings.Validate()

@@ -25,10 +25,18 @@ import {
 import { EventsOn } from "./wailsjs/runtime/runtime.js";
 
 const $ = (selector) => document.querySelector(selector);
+const BUILTIN_THEME_PACKS = [
+  { name: "aurora", display_name: "极光", description: "蓝紫冷色，适合作为通用默认主题" },
+  { name: "ocean", display_name: "海洋", description: "蓝青色调，清爽明亮" },
+  { name: "forest", display_name: "森林", description: "绿色系，柔和自然" },
+  { name: "sunset", display_name: "落日", description: "橙粉暖色，更有生活感" }
+];
+
 const state = {
   settings: { theme: { mode: "dark", variant: "aurora" }, groups: [], profiles: [] },
   sessions: [],
-  themePacks: [],
+  themePacks: [...BUILTIN_THEME_PACKS],
+  themeCatalog: { source: "builtin", stale: false, last_error: "" },
   selectedProfileId: "",
   activeSessionId: "",
   nav: "connections",
@@ -469,34 +477,68 @@ function profileStatus(profileId) {
   return sessions[sessions.length - 1].state || "offline";
 }
 
-function applyTheme() {
-  const theme = state.settings.theme || { mode: "dark", variant: "aurora" };
-  const pack = state.themePacks.some((item) => item.name === theme.variant) ? theme.variant : "aurora";
+async function loadThemeCatalog(refresh = false) {
+  try {
+    const catalog = refresh
+      ? await window.desktopKitTheme.refreshCatalog()
+      : await window.desktopKitTheme.loadCatalog();
 
-  let link = document.querySelector("#themePackStylesheet");
-  if (!link) {
-    link = document.createElement("link");
-    link.id = "themePackStylesheet";
-    link.rel = "stylesheet";
-    document.head.append(link);
+    if (catalog && Array.isArray(catalog.packs) && catalog.packs.length) {
+      state.themePacks = catalog.packs;
+      state.themeCatalog = {
+        source: catalog.source || "runtime",
+        stale: !!catalog.stale,
+        last_error: catalog.last_error || ""
+      };
+      return catalog;
+    }
+    throw new Error("主题目录没有可用 Theme Pack");
+  } catch (error) {
+    state.themePacks = [...BUILTIN_THEME_PACKS];
+    state.themeCatalog = {
+      source: "builtin",
+      stale: true,
+      last_error: String(error)
+    };
+    return null;
   }
-  link.href = "/desktopkit-theme/" + encodeURIComponent(pack) + ".css";
-  window.desktopKitTheme.setPack(pack);
+}
+
+async function applyTheme() {
+  const theme = state.settings.theme || { mode: "dark", variant: "aurora" };
+  const preferredPack = theme.variant || "aurora";
   window.desktopKitTheme.apply(theme.mode || "dark");
+
+  try {
+    await window.desktopKitTheme.applyPack(preferredPack);
+    return preferredPack;
+  } catch (error) {
+    console.warn("Theme Pack 加载失败，回退到 aurora:", error);
+    if (preferredPack !== "aurora") {
+      try {
+        await window.desktopKitTheme.applyPack("aurora");
+        return "aurora";
+      } catch (fallbackError) {
+        console.warn("aurora fallback 加载失败:", fallbackError);
+      }
+    }
+    window.desktopKitTheme.clearAppliedPack();
+    return "";
+  }
 }
 
 async function loadState() {
   const next = await GetState();
   state.settings = next.settings;
   state.sessions = next.sessions || [];
-  state.themePacks = next.theme_packs || [];
   state.launchAtLogin = !!next.launch_at_login;
   state.launchAtLoginSupported = !!next.launch_at_login_supported;
   state.dataDir = next.data_dir || "";
   $("#runtimeSummary").title = state.dataDir || "~/.config/ssh-client";
   for (const session of state.sessions) terminalFor(session.id);
   if (!state.activeSessionId && state.sessions.length) state.activeSessionId = state.sessions[state.sessions.length - 1].id;
-  applyTheme();
+  await loadThemeCatalog(false);
+  await applyTheme();
   renderAll();
 }
 
@@ -1372,28 +1414,70 @@ async function closeSession(id) {
   }
 }
 
+function themeCatalogSourceLabel() {
+  const source = state.themeCatalog.source || "builtin";
+  if (source === "remote") return "远程最新";
+  if (source === "cache") return "本地缓存";
+  if (source === "builtin") return "Kit 内置 fallback";
+  return source;
+}
+
+function renderThemePackOptions(preferred = "") {
+  const select = $("#themeVariant");
+  const wanted = preferred || (state.settings.theme && state.settings.theme.variant) || "aurora";
+  select.replaceChildren();
+
+  for (const pack of state.themePacks) {
+    select.add(new Option(pack.display_name + " · " + pack.name, pack.name));
+  }
+
+  if (!state.themePacks.some((pack) => pack.name === wanted)) {
+    const unavailable = new Option(wanted + " · 当前不可用", wanted);
+    unavailable.disabled = true;
+    select.add(unavailable);
+  }
+
+  select.value = wanted;
+  updateThemePackDescription();
+}
+
 function updateThemePackDescription() {
   const selected = state.themePacks.find((pack) => pack.name === $("#themeVariant").value);
-  $("#themePackDescription").textContent = selected ? selected.description : "由 Wails Desktop Kit Theme 提供。";
+  const description = selected ? selected.description : "当前 Theme Pack 暂不可用。";
+  const status = themeCatalogSourceLabel() + (state.themeCatalog.stale ? " · 目录可能已过期" : "");
+  $("#themePackDescription").textContent = description + " · " + status;
+  $("#themePackDescription").title = state.themeCatalog.last_error || "";
 }
 
 function openSettings() {
   const theme = state.settings.theme || { mode: "dark", variant: "aurora" };
   $("#themeMode").value = theme.mode || "dark";
-
-  const select = $("#themeVariant");
-  select.replaceChildren();
-  for (const pack of state.themePacks) {
-    select.add(new Option(pack.display_name + " · " + pack.name, pack.name));
-  }
-  const selectedPack = state.themePacks.some((pack) => pack.name === theme.variant) ? theme.variant : "aurora";
-  select.value = selectedPack;
-  updateThemePackDescription();
+  renderThemePackOptions(theme.variant || "aurora");
 
   $("#configDirPath").textContent = state.dataDir || "~/.config/ssh-client";
   $("#launchAtLogin").checked = state.launchAtLogin;
   $("#launchAtLogin").disabled = !state.launchAtLoginSupported;
   $("#settingsDialog").showModal();
+}
+
+async function refreshThemeCatalogFromSettings() {
+  const button = $("#refreshThemeCatalogButton");
+  const previous = button.textContent;
+  button.disabled = true;
+  button.textContent = "刷新中…";
+  try {
+    const catalog = await loadThemeCatalog(true);
+    renderThemePackOptions($("#themeVariant").value || (state.settings.theme && state.settings.theme.variant) || "aurora");
+    if (catalog) {
+      await applyTheme();
+      showToast("主题目录已刷新，共 " + state.themePacks.length + " 个主题");
+    } else {
+      showToast("远程主题刷新失败，继续使用 Kit 内置 fallback");
+    }
+  } finally {
+    button.disabled = false;
+    button.textContent = previous;
+  }
 }
 
 async function saveSettings() {
@@ -1405,7 +1489,7 @@ async function saveSettings() {
     state.settings = next.settings;
     state.launchAtLogin = !!next.launch_at_login;
     state.launchAtLoginSupported = !!next.launch_at_login_supported;
-    applyTheme();
+    await applyTheme();
     $("#settingsDialog").close();
     showToast("设置已保存");
   } catch (error) {
@@ -1659,6 +1743,7 @@ function bindEvents() {
   });
 
   $("#themeVariant").addEventListener("change", updateThemePackDescription);
+  $("#refreshThemeCatalogButton").addEventListener("click", refreshThemeCatalogFromSettings);
   $("#saveSettingsButton").addEventListener("click", saveSettings);
 
   $("#hostKeyDialog").addEventListener("cancel", (event) => {

@@ -60,12 +60,14 @@
 
     <section class="terminal-stage">
       <div id="emptyState" class="welcome-state">
-        <div class="welcome-icon">&gt;_</div>
-        <h1>开始 SSH 会话</h1>
-        <p>从左侧双击一个连接，或使用快速连接。连接资料保存在本机；密码和私钥口令不会写入普通配置文件。</p>
-        <div class="welcome-actions">
-          <button id="welcomeNewButton" class="dk-button dk-button-primary" type="button">新建连接</button>
-          <button id="welcomeQuickButton" class="dk-button dk-button-secondary" type="button">快速连接</button>
+        <div class="welcome-panel">
+          <div class="welcome-icon">&gt;_</div>
+          <h1>开始 SSH 会话</h1>
+          <p>从左侧双击一个连接，或使用快速连接。连接资料保存在本机；密码和私钥口令不会写入普通配置文件。</p>
+          <div class="welcome-actions">
+            <button id="welcomeNewButton" class="dk-button dk-button-primary" type="button">新建连接</button>
+            <button id="welcomeQuickButton" class="dk-button dk-button-secondary" type="button">快速连接</button>
+          </div>
         </div>
       </div>
 
@@ -292,10 +294,14 @@
         <option value="system">跟随系统</option>
       </select>
     </label>
-    <label class="dk-field">主题包
-      <select id="themeVariant"></select>
-      <small id="themePackDescription">由 Wails Desktop Kit Theme 提供。</small>
-    </label>
+    <div class="dk-field">
+      <label for="themeVariant">主题包</label>
+      <div class="field-with-action">
+        <select id="themeVariant"></select>
+        <button id="refreshThemeCatalogButton" class="dk-button dk-button-secondary compact-button" type="button">刷新主题</button>
+      </div>
+      <small id="themePackDescription">由 Desktop Kit Runtime Theme 提供。</small>
+    </div>
     <div class="settings-path-row">
       <span><strong>配置目录</strong><small>由 Desktop Kit paths 统一管理。</small></span>
       <code id="configDirPath">~/.config/ssh-client</code>

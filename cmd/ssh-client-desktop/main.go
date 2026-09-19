@@ -7,7 +7,7 @@ import (
 	"os"
 
 	desktopkit "github.com/wanstu/wails-desktop-kit"
-	theme "github.com/wanstu/wails-desktop-kit-theme"
+	kitui "github.com/wanstu/wails-desktop-kit/ui"
 )
 
 //go:embed all:frontend
@@ -52,8 +52,9 @@ func runDesktop(app *App, launch desktopkit.LaunchOptions) error {
 	return desktopkit.Run(desktopkit.Config{
 		ID:             "ssh-client-v1",
 		Title:          "SSH Client",
-		Assets:         theme.MountWithKit(assets),
+		Assets:         kitui.Mount(assets),
 		Bind:           []interface{}{app},
+		Theme:          desktopkit.DefaultThemeConfig(),
 		Launch:         launch,
 		Window:         window,
 		SingleInstance: true,

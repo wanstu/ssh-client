@@ -4,8 +4,8 @@
 
 当前已锁定：
 
-- Desktop：Go + Wails v2.15 + Wails Desktop Kit v0.4.0。
-- Theme：Wails Desktop Kit Theme v0.1.0，mode 与 Theme Pack 正交。
+- Desktop：Go + Wails v2.15 + Wails Desktop Kit v0.5.1；三平台 CI / Release 同时启用 Linux amd64 `.deb` 打包。
+- Theme：Desktop Kit Runtime Theme；不再编译依赖独立 Theme Module。mode 与 Theme Pack 正交，完整主题集可运行时刷新，Kit 内置 4 个离线 fallback。
 - SSH：`golang.org/x/crypto/ssh`。
 - Connection/Profile：本地 JSON。
 - 配置目录：Kit `paths`，默认 `~/.config/ssh-client`。

@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    uses: wanstu/wails-desktop-kit/.github/workflows/wails-desktop.yml@v0.4.0
+    uses: wanstu/wails-desktop-kit/.github/workflows/wails-desktop.yml@v0.5.1
     with:
       app-name: ssh-client
       desktop-dir: cmd/ssh-client-desktop
@@ -18,4 +18,6 @@ jobs:
       vet-command: ""
       build-command-windows: ./scripts/build.ps1
       build-command-unix: bash ./scripts/build.sh
+      linux-deb: true
+      linux-deb-description: "Cross-platform SSH desktop client"
       publish-release: true

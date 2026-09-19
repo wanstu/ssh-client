@@ -89,5 +89,5 @@ Password 等敏感数据使用 Desktop Kit Secure Config。Connection Profile �
 
 状态：Accepted
 
-light / dark / system 由 Desktop Kit theme runtime 管理，可选视觉配色由 Desktop Kit Theme Pack 提供。SSH Client 不再维护 Midnight / Graphite 等完整组件 token 副本，只保留终端区域的产品专属样式。
+light / dark / system 与 Theme Pack 均由 Desktop Kit v0.5+ Runtime Theme 管理。SSH Client 不再依赖独立 `wails-desktop-kit-theme` Go Module，也不编译主题 CSS；完整主题目录通过 Kit Runtime 动态加载与刷新，离线时使用 Kit 内置 fallback。应用只保存 mode / pack 选择，并保留终端区域的产品专属样式。
 

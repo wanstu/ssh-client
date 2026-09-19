@@ -107,6 +107,9 @@ func (s Settings) Validate() error {
 	default:
 		return fmt.Errorf("invalid theme mode %q", s.Theme.Mode)
 	}
+	if !validThemePackName(s.Theme.Variant) {
+		return fmt.Errorf("invalid theme pack %q", s.Theme.Variant)
+	}
 	groupIDs := make(map[string]struct{}, len(s.Groups))
 	for _, group := range s.Groups {
 		if strings.TrimSpace(group.ID) == "" || strings.TrimSpace(group.Name) == "" {
@@ -143,6 +146,21 @@ func (s Settings) Validate() error {
 		}
 	}
 	return nil
+}
+
+func validThemePackName(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > 64 {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (p ConnectionProfile) Validate() error {

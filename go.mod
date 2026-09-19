@@ -5,8 +5,7 @@ go 1.26
 require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/wailsapp/wails/v2 v2.15.0
-	github.com/wanstu/wails-desktop-kit v0.4.0
-	github.com/wanstu/wails-desktop-kit-theme v0.1.0
+	github.com/wanstu/wails-desktop-kit v0.5.1
 	golang.org/x/crypto v0.53.0
 )
 
