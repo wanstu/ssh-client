@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	kittheme "github.com/wanstu/wails-desktop-kit/theme"
 )
 
 const CurrentSettingsVersion = 1
@@ -102,13 +104,11 @@ func (s Settings) Validate() error {
 	if s.Version != CurrentSettingsVersion {
 		return fmt.Errorf("unsupported settings version %d", s.Version)
 	}
-	switch s.Theme.Mode {
-	case "light", "dark", "system":
-	default:
-		return fmt.Errorf("invalid theme mode %q", s.Theme.Mode)
+	if err := kittheme.ValidateMode(kittheme.Mode(s.Theme.Mode)); err != nil {
+		return fmt.Errorf("invalid theme mode %q: %w", s.Theme.Mode, err)
 	}
-	if !validThemePackName(s.Theme.Variant) {
-		return fmt.Errorf("invalid theme pack %q", s.Theme.Variant)
+	if err := kittheme.ValidatePackName(s.Theme.Variant); err != nil {
+		return fmt.Errorf("invalid theme pack %q: %w", s.Theme.Variant, err)
 	}
 	groupIDs := make(map[string]struct{}, len(s.Groups))
 	for _, group := range s.Groups {
@@ -146,21 +146,6 @@ func (s Settings) Validate() error {
 		}
 	}
 	return nil
-}
-
-func validThemePackName(name string) bool {
-	name = strings.TrimSpace(name)
-	if name == "" || len(name) > 64 {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
-			continue
-		}
-		return false
-	}
-	return true
 }
 
 func (p ConnectionProfile) Validate() error {

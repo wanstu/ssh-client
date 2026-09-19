@@ -14,6 +14,7 @@ import (
 	"github.com/wanstu/ssh-client/internal/model"
 	"github.com/wanstu/ssh-client/internal/sshclient"
 	"github.com/wanstu/ssh-client/internal/sshconfig"
+	desktopkit "github.com/wanstu/wails-desktop-kit"
 	kitautostart "github.com/wanstu/wails-desktop-kit/autostart"
 	"github.com/wanstu/wails-desktop-kit/secureconfig"
 )
@@ -51,7 +52,7 @@ type App struct {
 	launchAtLogin *kitautostart.Manager
 	sessions      *sshclient.Manager
 	mu            sync.RWMutex
-	ctx           context.Context
+	controller    *desktopkit.Controller
 
 	credentialMu      sync.Mutex
 	pendingCredential map[string]pendingCredentialAction
@@ -82,11 +83,16 @@ func NewApp() (*App, error) {
 	return app, nil
 }
 
-func (a *App) startup(ctx context.Context) { a.mu.Lock(); a.ctx = ctx; a.mu.Unlock() }
+func (a *App) setController(controller *desktopkit.Controller) {
+	a.mu.Lock()
+	a.controller = controller
+	a.mu.Unlock()
+}
+
 func (a *App) shutdown(context.Context) {
 	a.sessions.CloseAll()
 	a.mu.Lock()
-	a.ctx = nil
+	a.controller = nil
 	a.mu.Unlock()
 }
 
@@ -98,10 +104,10 @@ func (a *App) emit(event string, payload any) {
 	}
 
 	a.mu.RLock()
-	ctx := a.ctx
+	controller := a.controller
 	a.mu.RUnlock()
-	if ctx != nil {
-		wailsruntime.EventsEmit(ctx, event, payload)
+	if controller != nil {
+		_ = controller.Emit(event, payload)
 	}
 }
 
@@ -173,10 +179,10 @@ func (a *App) handleCredentialState(snapshot sshclient.SessionSnapshot) {
 
 func (a *App) emitAppEvent(event string, payload any) {
 	a.mu.RLock()
-	ctx := a.ctx
+	controller := a.controller
 	a.mu.RUnlock()
-	if ctx != nil {
-		wailsruntime.EventsEmit(ctx, event, payload)
+	if controller != nil {
+		_ = controller.Emit(event, payload)
 	}
 }
 
@@ -563,12 +569,12 @@ func (a *App) DisconnectAll()                         { a.sessions.CloseAll() }
 
 func (a *App) ChoosePrivateKey() (string, error) {
 	a.mu.RLock()
-	ctx := a.ctx
+	controller := a.controller
 	a.mu.RUnlock()
-	if ctx == nil {
+	if controller == nil {
 		return "", errors.New("桌面运行时尚未就绪")
 	}
-	return wailsruntime.OpenFileDialog(ctx, wailsruntime.OpenDialogOptions{Title: "选择 SSH 私钥", Filters: []wailsruntime.FileFilter{{DisplayName: "SSH private key", Pattern: "*"}, {DisplayName: "All files", Pattern: "*"}}})
+	return controller.OpenFileDialog(wailsruntime.OpenDialogOptions{Title: "选择 SSH 私钥", Filters: []wailsruntime.FileFilter{{DisplayName: "SSH private key", Pattern: "*"}, {DisplayName: "All files", Pattern: "*"}}})
 }
 
 func (a *App) PreviewSSHConfig(path string) (sshconfig.Preview, error) {
@@ -577,12 +583,12 @@ func (a *App) PreviewSSHConfig(path string) (sshconfig.Preview, error) {
 
 func (a *App) ChooseSSHConfig() (string, error) {
 	a.mu.RLock()
-	ctx := a.ctx
+	controller := a.controller
 	a.mu.RUnlock()
-	if ctx == nil {
+	if controller == nil {
 		return "", errors.New("桌面运行时尚未就绪")
 	}
-	return wailsruntime.OpenFileDialog(ctx, wailsruntime.OpenDialogOptions{
+	return controller.OpenFileDialog(wailsruntime.OpenDialogOptions{
 		Title: "选择 SSH Config",
 		Filters: []wailsruntime.FileFilter{
 			{DisplayName: "OpenSSH config", Pattern: "config;*.conf;*"},

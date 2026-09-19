@@ -50,20 +50,21 @@ func runDesktop(app *App, launch desktopkit.LaunchOptions) error {
 	disconnectAll := desktopkit.Action("断开全部 SSH 会话", func(*desktopkit.Controller) error { app.DisconnectAll(); return nil })
 
 	return desktopkit.Run(desktopkit.Config{
-		ID:             "ssh-client-v1",
-		Title:          "SSH Client",
-		Assets:         kitui.Mount(assets),
-		Bind:           []interface{}{app},
-		Theme:          desktopkit.DefaultThemeConfig(),
-		Launch:         launch,
-		Window:         window,
-		SingleInstance: true,
+		ID:                   "ssh-client-v1",
+		Title:                "SSH Client",
+		Assets:               kitui.Mount(assets),
+		Bind:                 []interface{}{app},
+		Theme:                desktopkit.DefaultThemeConfig(),
+		Launch:               launch,
+		Window:               window,
+		SingleInstance:       true,
+		SecondInstancePolicy: desktopkit.SecondInstanceWakeManual,
 		Tray: desktopkit.TrayConfig{
 			Enabled: true, Icon: appIcon, AutoStart: app.launchAtLogin,
 			Tooltip: "SSH Client", LaunchAtLoginLabel: "开机启动 SSH Client",
 			Items:     []desktopkit.TrayItem{disconnectAll},
 			QuitLabel: "退出 SSH Client",
 		},
-		Hooks: desktopkit.Hooks{Startup: app.startup, Shutdown: app.shutdown},
+		Hooks: desktopkit.Hooks{Ready: app.setController, Shutdown: app.shutdown},
 	})
 }
