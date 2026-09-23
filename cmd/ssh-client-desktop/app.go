@@ -858,16 +858,22 @@ func normalizeProfile(profile model.ConnectionProfile) model.ConnectionProfile {
 	if profile.Terminal.FontFamily == "" {
 		profile.Terminal.FontFamily = defaults.Terminal.FontFamily
 	}
-	if profile.Terminal.FontSize <= 0 {
+	if profile.Terminal.FontSize < 10 || profile.Terminal.FontSize > 28 {
 		profile.Terminal.FontSize = defaults.Terminal.FontSize
 	}
-	if profile.Terminal.ColorScheme == "" {
+	switch strings.ToLower(strings.TrimSpace(profile.Terminal.ColorScheme)) {
+	case "midnight", "graphite", "daylight":
+		profile.Terminal.ColorScheme = strings.ToLower(strings.TrimSpace(profile.Terminal.ColorScheme))
+	default:
 		profile.Terminal.ColorScheme = defaults.Terminal.ColorScheme
 	}
-	if profile.Terminal.ScrollbackLines <= 0 {
+	if profile.Terminal.ScrollbackLines < 100 || profile.Terminal.ScrollbackLines > 100000 {
 		profile.Terminal.ScrollbackLines = defaults.Terminal.ScrollbackLines
 	}
-	if profile.Terminal.CursorStyle == "" {
+	switch strings.ToLower(strings.TrimSpace(profile.Terminal.CursorStyle)) {
+	case "bar", "block", "underline":
+		profile.Terminal.CursorStyle = strings.ToLower(strings.TrimSpace(profile.Terminal.CursorStyle))
+	default:
 		profile.Terminal.CursorStyle = defaults.Terminal.CursorStyle
 	}
 	if profile.Source.Kind == "" {

@@ -705,6 +705,30 @@ button, input, select {
   overflow: hidden;
 }
 
+.session-view[data-terminal-scheme="midnight"] {
+  --ssh-terminal-bg: #10141c;
+  --ssh-terminal-text: #d7dae0;
+  --ssh-terminal-muted: #8490a4;
+  --ssh-terminal-accent: #8aa4ff;
+  --ssh-terminal-cursor: #f1f4ff;
+}
+
+.session-view[data-terminal-scheme="graphite"] {
+  --ssh-terminal-bg: #1b1b1b;
+  --ssh-terminal-text: #e2e2e2;
+  --ssh-terminal-muted: #989898;
+  --ssh-terminal-accent: #a8b4c8;
+  --ssh-terminal-cursor: #ffffff;
+}
+
+.session-view[data-terminal-scheme="daylight"] {
+  --ssh-terminal-bg: #f7f7f7;
+  --ssh-terminal-text: #252525;
+  --ssh-terminal-muted: #6b6b6b;
+  --ssh-terminal-accent: #315efb;
+  --ssh-terminal-cursor: #202020;
+}
+
 .session-toolbar {
   grid-row: 1;
 }
@@ -857,8 +881,50 @@ button, input, select {
   font-weight: 800;
 }
 
+.terminal-style-run {
+  white-space: pre;
+}
+
 .terminal-cursor {
+  position: absolute;
+  z-index: 4;
   display: none;
+  box-sizing: border-box;
+  pointer-events: none;
+  color: var(--ssh-terminal-cursor);
+  opacity: 1;
+}
+
+.terminal-cursor.is-visible {
+  display: block;
+}
+
+.terminal-viewport:not(:focus) .terminal-cursor {
+  opacity: .55;
+}
+
+.terminal-cursor::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+}
+
+.terminal-cursor[data-cursor-style="bar"]::after {
+  width: 2px;
+  right: auto;
+  background: currentColor;
+}
+
+.terminal-cursor[data-cursor-style="block"]::after {
+  border: 1px solid currentColor;
+  background: transparent;
+}
+
+.terminal-cursor[data-cursor-style="underline"]::after {
+  top: auto;
+  height: 2px;
+  background: currentColor;
 }
 
 .terminal-statusbar {
@@ -881,7 +947,40 @@ button, input, select {
 
 .profile-dialog {
   width: min(780px, 92vw);
+  max-height: min(860px, 92vh);
+  overflow: auto;
 }
+
+.profile-terminal-section {
+  border: 1px solid color-mix(in srgb, var(--dk-border) 70%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--dk-bg-subtle) 72%, transparent);
+  padding: 12px;
+}
+
+.profile-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.profile-section-heading strong,
+.profile-section-heading small {
+  display: block;
+}
+
+.profile-section-heading strong {
+  font-size: 13px;
+}
+
+.profile-section-heading small {
+  margin-top: 3px;
+  color: var(--dk-text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+
 
 .compact-dialog {
   width: min(560px, 92vw);

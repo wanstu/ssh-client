@@ -90,12 +90,13 @@
         <div id="sessionBanner" class="session-banner is-hidden"></div>
         <div id="terminalViewport" class="terminal-viewport" tabindex="0" aria-label="SSH 终端">
           <pre id="terminalText" class="terminal-text"></pre>
-          <div id="terminalCursor" class="terminal-cursor"></div>
+          <div id="terminalCursor" class="terminal-cursor" aria-hidden="true"></div>
         </div>
         <footer class="terminal-statusbar">
           <span id="terminalStateText">SSH</span>
           <span id="terminalSizeText">80 × 24</span>
-          <span>UTF-8</span>
+          <span id="terminalProfileText">Midnight · 13px</span>
+          <span id="terminalEncodingText">UTF-8</span>
         </footer>
       </div>
 
@@ -169,6 +170,47 @@
       </div>
       <label class="dk-field is-span-2">标签<input id="profileTags" autocomplete="off" placeholder="Web, Linux, 生产环境"></label>
     </div>
+
+    <section class="profile-terminal-section" aria-labelledby="profileTerminalHeading">
+      <div class="profile-section-heading">
+        <div>
+          <strong id="profileTerminalHeading">终端配置</strong>
+          <small>终端配色与应用主题独立，配置会在新建和已打开的会话中应用。</small>
+        </div>
+      </div>
+      <div class="dk-form-grid">
+        <label class="dk-field">TERM
+          <input id="profileTerminalTerm" autocomplete="off" value="xterm-256color">
+        </label>
+        <label class="dk-field">编码
+          <input id="profileTerminalEncoding" autocomplete="off" value="UTF-8">
+        </label>
+        <label class="dk-field is-span-2">字体
+          <input id="profileTerminalFontFamily" autocomplete="off" value="Cascadia Code">
+        </label>
+        <label class="dk-field">字号
+          <input id="profileTerminalFontSize" type="number" min="10" max="28" value="13">
+        </label>
+        <label class="dk-field">回滚行数
+          <input id="profileTerminalScrollback" type="number" min="100" max="100000" step="100" value="10000">
+        </label>
+        <label class="dk-field">终端配色
+          <select id="profileTerminalColorScheme">
+            <option value="midnight">Midnight</option>
+            <option value="graphite">Graphite</option>
+            <option value="daylight">Daylight</option>
+          </select>
+        </label>
+        <label class="dk-field">光标
+          <select id="profileTerminalCursorStyle">
+            <option value="bar">Bar</option>
+            <option value="block">Block</option>
+            <option value="underline">Underline</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
     <label class="dk-setting-row">
       <span><strong>加入收藏</strong><small>收藏与分组是两个独立维度。</small></span>
       <input id="profileFavorite" class="dk-switch" type="checkbox">

@@ -113,7 +113,28 @@ TerminalConfig
   cursor_style
 ```
 
-应用主题不应写进 TerminalConfig。
+默认值：
+
+```text
+term             = xterm-256color
+encoding         = UTF-8
+font_family      = Cascadia Code
+font_size        = 13
+color_scheme     = midnight
+scrollback_lines = 10000
+cursor_style     = bar
+```
+
+约束：
+
+- font_size：10 ~ 28。
+- scrollback_lines：100 ~ 100000。
+- color_scheme：midnight / graphite / daylight。
+- cursor_style：bar / block / underline。
+- 不合法值由后端 normalize 回默认值，枚举值统一为小写。
+- Profile TerminalConfig 应实际作用于终端字体、字号、配色、scrollback、cursor 和 PTY TERM。
+- Terminal 配色与整个应用的 Theme Pack 独立，应用主题不应写进 TerminalConfig。
+- 当前字符宽度实现以常见 CJK / combining / 全角字符为目标，不宣称完整实现 Unicode grapheme segmentation 或所有 wcwidth 规则。
 
 ## 8. ReconnectConfig
 
