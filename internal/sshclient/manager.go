@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/text/encoding/htmlindex"
+	"golang.org/x/text/transform"
 )
 
 var errHostKeyRejected = errors.New("host key was not trusted")
@@ -65,6 +67,9 @@ func (m *Manager) Connect(cfg ConnectConfig) (SessionSnapshot, error) {
 	if cfg.Terminal.Term == "" {
 		cfg.Terminal.Term = "xterm-256color"
 	}
+	if strings.TrimSpace(cfg.Terminal.Encoding) == "" {
+		cfg.Terminal.Encoding = "UTF-8"
+	}
 	if cfg.Name == "" {
 		cfg.Name = cfg.Host
 	}
@@ -108,12 +113,33 @@ func (m *Manager) Write(sessionID, data string) error {
 	}
 	ms.mu.Lock()
 	stdin := ms.stdin
+	encodingName := ms.cfg.Terminal.Encoding
 	ms.mu.Unlock()
 	if stdin == nil {
 		return errors.New("session shell is not connected")
 	}
-	_, err = io.WriteString(stdin, data)
+	payload, err := encodeTerminalInput(data, encodingName)
+	if err != nil {
+		return err
+	}
+	_, err = stdin.Write(payload)
 	return err
+}
+
+func encodeTerminalInput(data, encodingName string) ([]byte, error) {
+	encodingName = strings.TrimSpace(encodingName)
+	if encodingName == "" || strings.EqualFold(encodingName, "UTF-8") || strings.EqualFold(encodingName, "UTF8") {
+		return []byte(data), nil
+	}
+	enc, err := htmlindex.Get(encodingName)
+	if err != nil || enc == nil {
+		return nil, fmt.Errorf("unsupported terminal encoding %q", encodingName)
+	}
+	payload, _, err := transform.Bytes(enc.NewEncoder(), []byte(data))
+	if err != nil {
+		return nil, fmt.Errorf("encode terminal input as %s: %w", encodingName, err)
+	}
+	return payload, nil
 }
 
 func (m *Manager) Resize(sessionID string, cols, rows int) error {

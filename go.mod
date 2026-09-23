@@ -7,6 +7,7 @@ require (
 	github.com/wailsapp/wails/v2 v2.15.0
 	github.com/wanstu/wails-desktop-kit v0.8.0
 	golang.org/x/crypto v0.53.0
+	golang.org/x/text v0.39.0
 )
 
 require (
@@ -40,5 +41,4 @@ require (
 	github.com/zalando/go-keyring v0.2.8 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.39.0 // indirect
 )
