@@ -2073,9 +2073,30 @@ function renderTerminalContent(element, terminal) {
 
     let c = 0;
     while (c <= last) {
+      const cell = cells[c] || "";
+      if (cell === "") {
+        c++;
+        continue;
+      }
       const styleId = styles[c] || 0;
+      const width = terminalCellWidth(cell);
+      if (width === 2) {
+        const span = document.createElement("span");
+        span.className = "terminal-wide-cell" + (styleId === 0 ? "" : " terminal-style-run");
+        span.textContent = cell;
+        if (styleId !== 0) applyTerminalRunStyle(span, terminal.styleFor(styleId));
+        fragment.append(span);
+        c += (c + 1 <= last && cells[c + 1] === "") ? 2 : 1;
+        continue;
+      }
+
       let end = c + 1;
-      while (end <= last && (styles[end] || 0) === styleId) end++;
+      while (
+        end <= last &&
+        cells[end] !== "" &&
+        terminalCellWidth(cells[end] || "") !== 2 &&
+        (styles[end] || 0) === styleId
+      ) end++;
       const text = cells.slice(c, end).join("");
       if (styleId === 0) {
         fragment.append(document.createTextNode(text));
@@ -2148,7 +2169,10 @@ function renderTerminal() {
   const terminal = terminalFor(session.id);
   applyTerminalProfile(session, terminal);
   const stick = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 48;
-  renderTerminalContent($("#terminalText"), terminal);
+  const terminalText = $("#terminalText");
+  const metrics = terminalCellMetrics();
+  terminalText.style.setProperty("--terminal-cell-width", metrics.charWidth + "px");
+  renderTerminalContent(terminalText, terminal);
   positionTerminalCursor(terminal, session.state === "connected");
   if (stick) window.requestAnimationFrame(() => { viewport.scrollTop = viewport.scrollHeight; });
 }

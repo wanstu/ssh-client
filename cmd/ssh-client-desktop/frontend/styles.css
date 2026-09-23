@@ -888,6 +888,16 @@ button, input, select {
   white-space: pre;
 }
 
+.terminal-wide-cell {
+  display: inline-block;
+  width: calc(var(--terminal-cell-width, 8px) * 2);
+  min-width: calc(var(--terminal-cell-width, 8px) * 2);
+  max-width: calc(var(--terminal-cell-width, 8px) * 2);
+  overflow: visible;
+  vertical-align: top;
+  white-space: pre;
+}
+
 .terminal-cursor {
   position: absolute;
   z-index: 4;

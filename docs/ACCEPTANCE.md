@@ -196,7 +196,7 @@
 - Terminal 使用固定兼容配色，不由应用主题重写 ANSI / OSC 基础色。
 - Windows WebView2 下终端应支持中文 IME composition，普通 shell 与 vim/tmux 内均可输入中文；连续中文使用 Backspace 时每次只删除一个字符，不得因双宽字符列移动而误删前一个字符。
 - 调整窗口高度时普通 Shell 内容不得产生大段空白或重复 prompt；缩小时优先裁剪光标以下区域，而不是无条件把顶部内容滚入 scrollback。
-- 终端字体由 Desktop 控制；英文使用配置的等宽字体，中文使用稳定的 CJK fallback，并关闭代码字体连字以保证单元格布局。
+- 终端字体由 Desktop 控制；英文使用配置的等宽字体，中文使用稳定的 CJK fallback，并关闭代码字体连字以保证单元格布局。CJK/全角字符的 DOM 渲染宽度必须固定为两个 terminal cells，避免 fallback 字体实际像素宽度导致光标累计漂移。
 - Comfortable / Compact 不造成文字截断。
 - Ctrl+K 可键盘操作，命令面板必须使用完整主题样式而非浏览器默认控件样式。
 - 所有 Modal 可 Escape 关闭，但高风险确认状态的关闭语义必须等于 Cancel / Keep blocked。
