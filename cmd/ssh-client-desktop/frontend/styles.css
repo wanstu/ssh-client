@@ -888,6 +888,39 @@ button, input, select {
   white-space: pre;
 }
 
+.terminal-cursor-anchor {
+  position: relative;
+  display: inline-block;
+  width: 0;
+  height: 1em;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  vertical-align: top;
+  pointer-events: none;
+}
+
+.terminal-cursor-anchor::after {
+  content: "";
+  position: absolute;
+  z-index: 4;
+  display: none;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: var(--terminal-line-height, 1.5em);
+  background: var(--ssh-terminal-cursor);
+  pointer-events: none;
+}
+
+.terminal-cursor-anchor.is-visible::after {
+  display: block;
+}
+
+.terminal-viewport:not(:focus-within) .terminal-cursor-anchor::after {
+  opacity: .55;
+}
+
 .terminal-wide-cell {
   display: inline-block;
   width: calc(var(--terminal-cell-width, 8px) * 2);
@@ -943,7 +976,7 @@ button, input, select {
 }
 
 .terminal-cursor[data-cursor-style="bar"]::after {
-  width: 2px;
+  width: 1px;
   right: auto;
   background: currentColor;
 }

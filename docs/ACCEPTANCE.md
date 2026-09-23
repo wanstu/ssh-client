@@ -157,7 +157,7 @@
 - resize 使用实际字体字符宽度、line-height 与 viewport padding 计算 PTY 行列，并合并高频 resize。
 - UTF-8 / CJK 宽字符正常；combining character 不额外占列。复杂 ZWJ emoji、旗帜 emoji和 East Asian Ambiguous Width 仍属于近似兼容范围。
 - ANSI SGR 支持基础/bright 16 色、256 色、True Color，以及 bold / dim / italic / underline / inverse / hidden / strike。
-- 光标作为独立 DOM 元素渲染，不覆盖终端字符；支持 bar / outline block / underline，失焦时降低亮度。
+- 光标使用终端内容流中的真实 DOM 锚点定位，并固定渲染为 Windows 风格 1px 单竖线；不得用 `col × 估算字符宽度` 直接决定可见光标位置，失焦时降低亮度。
 - scrollback 有上限配置，并保留屏幕滚动时的 SGR 样式。
 - alternate screen 支持 DEC 47 / 1047 / 1048 / 1049，退出后恢复 main screen、cursor 与相关状态。
 - autowrap 使用 wrap-pending 语义；关闭 DEC ?7 后右边界不会错误滚屏。

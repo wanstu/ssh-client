@@ -2060,9 +2060,19 @@ function applyTerminalRunStyle(span, style) {
 function renderTerminalContent(element, terminal) {
   const fragment = document.createDocumentFragment();
   const rows = terminal.renderRows();
+  const cursorModel = terminal.cursorModel(true);
+  const appendCursorAnchor = () => {
+    const anchor = document.createElement("span");
+    anchor.id = "terminalCursorAnchor";
+    anchor.className = "terminal-cursor-anchor";
+    anchor.setAttribute("aria-hidden", "true");
+    fragment.append(anchor);
+  };
+
   rows.forEach((entry, rowIndex) => {
     const cells = entry.cells || [];
     const styles = entry.styles || [];
+    const cursorCol = rowIndex === cursorModel.row ? Math.max(0, cursorModel.col) : -1;
     let last = -1;
     for (let c = cells.length - 1; c >= 0; c--) {
       if ((cells[c] !== " " && cells[c] !== "") || (styles[c] || 0) !== 0) {
@@ -2070,9 +2080,11 @@ function renderTerminalContent(element, terminal) {
         break;
       }
     }
+    if (cursorCol >= 0) last = Math.max(last, cursorCol);
 
     let c = 0;
     while (c <= last) {
+      if (c === cursorCol) appendCursorAnchor();
       const cell = cells[c] || "";
       if (cell === "") {
         c++;
@@ -2097,6 +2109,7 @@ function renderTerminalContent(element, terminal) {
         terminalCellWidth(cells[end] || "") !== 2 &&
         (styles[end] || 0) === styleId
       ) end++;
+      if (cursorCol > c && cursorCol < end) end = cursorCol;
       const text = cells.slice(c, end).join("");
       if (styleId === 0) {
         fragment.append(document.createTextNode(text));
@@ -2136,11 +2149,22 @@ function applyTerminalProfile(session, terminal) {
 }
 
 function positionTerminalCursor(terminal, visible) {
-  const cursor = $("#terminalCursor");
+  const legacyCursor = $("#terminalCursor");
+  const viewport = $("#terminalViewport");
   const model = terminal.cursorModel(visible);
   const metrics = terminalCellMetrics();
-  const left = metrics.paddingLeft + model.col * metrics.charWidth;
-  const top = metrics.paddingTop + model.row * metrics.lineHeight;
+  const anchor = $("#terminalCursorAnchor");
+  if (legacyCursor) legacyCursor.classList.remove("is-visible");
+  if (anchor) anchor.classList.toggle("is-visible", model.visible);
+
+  let left = metrics.paddingLeft + model.col * metrics.charWidth;
+  let top = metrics.paddingTop + model.row * metrics.lineHeight;
+  if (anchor) {
+    const anchorRect = anchor.getBoundingClientRect();
+    const viewportRect = viewport.getBoundingClientRect();
+    left = anchorRect.left - viewportRect.left + viewport.scrollLeft;
+    top = anchorRect.top - viewportRect.top + viewport.scrollTop;
+  }
   const imeInput = $("#terminalImeInput");
   if (imeInput) {
     imeInput.style.left = left + "px";
@@ -2150,16 +2174,6 @@ function positionTerminalCursor(terminal, visible) {
     imeInput.style.fontFamily = getComputedStyle($("#terminalText")).fontFamily;
     imeInput.style.fontSize = getComputedStyle($("#terminalText")).fontSize;
   }
-  if (!model.visible) {
-    cursor.classList.remove("is-visible");
-    return;
-  }
-  cursor.dataset.cursorStyle = model.style;
-  cursor.style.left = left + "px";
-  cursor.style.top = top + "px";
-  cursor.style.width = metrics.charWidth + "px";
-  cursor.style.height = metrics.lineHeight + "px";
-  cursor.classList.add("is-visible");
 }
 
 function renderTerminal() {
@@ -2172,6 +2186,7 @@ function renderTerminal() {
   const terminalText = $("#terminalText");
   const metrics = terminalCellMetrics();
   terminalText.style.setProperty("--terminal-cell-width", metrics.charWidth + "px");
+  terminalText.style.setProperty("--terminal-line-height", metrics.lineHeight + "px");
   renderTerminalContent(terminalText, terminal);
   positionTerminalCursor(terminal, session.state === "connected");
   if (stick) window.requestAnimationFrame(() => { viewport.scrollTop = viewport.scrollHeight; });
@@ -2339,7 +2354,6 @@ function openProfileDialog(profile = null) {
   $("#profileTerminalFontFamily").value = terminal.font_family;
   $("#profileTerminalFontSize").value = terminal.font_size;
   $("#profileTerminalScrollback").value = terminal.scrollback_lines;
-  $("#profileTerminalCursorStyle").value = terminal.cursor_style;
   $("#profileFavorite").checked = editing ? !!profile.favorite : false;
   $("#profileError").classList.add("is-hidden");
   $("#deleteProfileButton").classList.toggle("is-hidden", !editing);
@@ -2514,7 +2528,7 @@ function profileFromForm() {
       font_size: Number($("#profileTerminalFontSize").value || DEFAULT_TERMINAL_CONFIG.font_size),
       color_scheme: existing && existing.terminal ? existing.terminal.color_scheme || DEFAULT_TERMINAL_CONFIG.color_scheme : DEFAULT_TERMINAL_CONFIG.color_scheme,
       scrollback_lines: Number($("#profileTerminalScrollback").value || DEFAULT_TERMINAL_CONFIG.scrollback_lines),
-      cursor_style: $("#profileTerminalCursorStyle").value || DEFAULT_TERMINAL_CONFIG.cursor_style
+      cursor_style: "bar"
     },
     reconnect: existing && existing.reconnect ? existing.reconnect : { enabled: true, keep_tab_on_disconnect: true },
     source: existing && existing.source ? existing.source : { kind: "manual" }

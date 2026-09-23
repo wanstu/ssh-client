@@ -130,7 +130,7 @@ cursor_style     = bar
 - font_size：10 ~ 28。
 - scrollback_lines：100 ~ 100000。
 - color_scheme：保留 midnight / graphite / daylight 作为配置兼容字段；Desktop 当前固定使用 midnight 兼容配色，不再暴露切换入口。
-- cursor_style：bar / block / underline。
+- cursor_style：保留为配置兼容字段；Desktop 当前固定显示 Windows 风格单竖线光标，新保存的 Profile 统一写入 bar。
 - 不合法值由后端 normalize 回默认值，枚举值统一为小写。
 - Profile TerminalConfig 应实际作用于终端字体、字号、scrollback、cursor、encoding 和 PTY TERM；color_scheme 当前仅保留数据兼容。
 - Terminal 配色与整个应用的 Theme Pack 独立，应用主题不应写进 TerminalConfig。
