@@ -393,16 +393,46 @@ class TerminalBuffer {
     this.screen = this.screen.map((row) => fit(row, () => " "));
     this.styleScreen = this.styleScreen.map((row) => fit(row, () => 0));
 
-    while (this.screen.length < rows) {
-      this.screen.push(Array.from({ length: cols }, () => " "));
-      this.styleScreen.push(Array.from({ length: cols }, () => 0));
-    }
-    while (this.screen.length > rows) {
-      const removed = this.screen.shift();
-      const removedStyles = this.styleScreen.shift();
-      if (!this.alternateScreen) {
-        this.scrollback.push(removed);
-        this.scrollbackStyles.push(removedStyles);
+    if (rows > oldRows) {
+      let extra = rows - oldRows;
+      // When a normal terminal was pinned to the bottom, reveal recent
+      // scrollback above it before adding new blank space below. For a shell
+      // whose cursor is not at the bottom, simply grow downward.
+      if (!this.alternateScreen && this.row === oldRows - 1 && this.scrollback.length) {
+        const pull = Math.min(extra, this.scrollback.length);
+        const pulledRows = this.scrollback.splice(this.scrollback.length - pull, pull);
+        const pulledStyles = this.scrollbackStyles.splice(this.scrollbackStyles.length - pull, pull);
+        this.screen.unshift(...pulledRows);
+        this.styleScreen.unshift(...pulledStyles);
+        this.row += pull;
+        extra -= pull;
+      }
+      while (extra-- > 0) {
+        this.screen.push(Array.from({ length: cols }, () => " "));
+        this.styleScreen.push(Array.from({ length: cols }, () => 0));
+      }
+    } else if (rows < oldRows) {
+      let remove = oldRows - rows;
+      // Prefer removing rows below the cursor. This is the important normal
+      // shell case: resizing a window must not push visible command history
+      // into scrollback just because the viewport became shorter.
+      const belowCursor = Math.max(0, this.screen.length - 1 - this.row);
+      const removeBottom = Math.min(remove, belowCursor);
+      if (removeBottom > 0) {
+        this.screen.splice(this.screen.length - removeBottom, removeBottom);
+        this.styleScreen.splice(this.styleScreen.length - removeBottom, removeBottom);
+        remove -= removeBottom;
+      }
+      // If the cursor itself would no longer fit, scroll only the minimum
+      // number of top rows and keep the cursor attached to the same content.
+      while (remove-- > 0) {
+        const removed = this.screen.shift();
+        const removedStyles = this.styleScreen.shift();
+        if (!this.alternateScreen) {
+          this.scrollback.push(removed);
+          this.scrollbackStyles.push(removedStyles);
+        }
+        this.row = Math.max(0, this.row - 1);
       }
     }
 
@@ -2072,10 +2102,14 @@ function applyTerminalProfile(session, terminal) {
   // Application themes intentionally do not recolor the terminal surface.
   viewport.dataset.terminalScheme = "midnight";
   $("#sessionView").dataset.terminalScheme = "midnight";
-  text.style.fontFamily = '"' + String(config.font_family || "Cascadia Code").replace(/"/g, "") + '", "JetBrains Mono", Consolas, monospace';
+  const requestedFont = String(config.font_family || "Cascadia Code").replace(/"/g, "").trim() || "Cascadia Code";
+  // Keep all terminal glyphs on a predictable mono/CJK fallback chain.
+  // NSimSun is used before generic CJK fallback on Windows because it keeps
+  // full-width glyph metrics much closer to two terminal cells.
+  text.style.fontFamily = '"' + requestedFont + '", "Cascadia Mono", "Cascadia Code", Consolas, "NSimSun", "SimSun", monospace';
   text.style.fontSize = String(config.font_size || 13) + "px";
   const profileStatus = $("#terminalProfileText");
-  if (profileStatus) profileStatus.textContent = "兼容配色 · " + (config.font_size || 13) + "px";
+  if (profileStatus) profileStatus.textContent = "兼容配色 · " + requestedFont + " · " + (config.font_size || 13) + "px";
   const encodingStatus = $("#terminalEncodingText");
   if (encodingStatus) encodingStatus.textContent = config.encoding || "UTF-8";
 }

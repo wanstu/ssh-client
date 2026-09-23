@@ -859,7 +859,9 @@ button, input, select {
   min-height: 100%;
   margin: 0;
   color: var(--ssh-terminal-text);
-  font: 14px/1.55 "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  font: 14px/1.5 "Cascadia Mono", "Cascadia Code", Consolas, "NSimSun", "SimSun", monospace;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
   white-space: pre;
   tab-size: 8;
   user-select: text;
