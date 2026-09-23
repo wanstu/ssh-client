@@ -67,6 +67,9 @@ const state = {
 let toastTimer = 0;
 let commandSelection = 0;
 let visibleCommandItems = [];
+let terminalImeComposing = false;
+let terminalImeSuppressInput = false;
+let terminalFocusInside = false;
 
 
 const TERMINAL_STYLE_CACHE_LIMIT = 4096;
@@ -1099,7 +1102,7 @@ function restoreHistorySession(record) {
   }
   state.activeSessionId = restoredId;
   renderAll();
-  window.setTimeout(() => $("#terminalViewport").focus(), 0);
+  window.setTimeout(() => focusTerminalInput(), 0);
 }
 
 const SIDEBAR_DEFAULT_WIDTH = 310;
@@ -1282,7 +1285,7 @@ async function pasteTerminalClipboard() {
   const text = await readClipboardText();
   if (!text) return;
   await sendTerminalPaste(text);
-  $("#terminalViewport").focus();
+  focusTerminalInput();
 }
 
 function selectAllTerminalText() {
@@ -1806,7 +1809,7 @@ async function insertCommandFromHistory(command) {
   // "插入"只作为一次终端粘贴。当前光标位置、已有内容以及最终如何编辑，
   // 全部交给远端 shell/readline 处理，不在客户端模拟清行或移动光标。
   await sendTerminalPaste(command);
-  $("#terminalViewport").focus();
+  focusTerminalInput();
 }
 
 function renderHistorySidebar(list, records = state.commandHistory, query = "") {
@@ -1945,7 +1948,7 @@ function selectSession(id) {
   renderActiveSession();
   if (state.nav === "sessions") renderSidebar();
   scheduleActiveTerminalResize();
-  window.setTimeout(() => $("#terminalViewport").focus(), 0);
+  window.setTimeout(() => focusTerminalInput(), 0);
 }
 
 function activeSession() {
@@ -2063,15 +2066,14 @@ function applyTerminalProfile(session, terminal) {
   terminal.setConfig(config);
   const viewport = $("#terminalViewport");
   const text = $("#terminalText");
-  viewport.dataset.terminalScheme = config.color_scheme || "midnight";
-  $("#sessionView").dataset.terminalScheme = config.color_scheme || "midnight";
+  // Keep the emulator palette fixed so ANSI/OSC behaviour stays predictable.
+  // Application themes intentionally do not recolor the terminal surface.
+  viewport.dataset.terminalScheme = "midnight";
+  $("#sessionView").dataset.terminalScheme = "midnight";
   text.style.fontFamily = '"' + String(config.font_family || "Cascadia Code").replace(/"/g, "") + '", "JetBrains Mono", Consolas, monospace';
   text.style.fontSize = String(config.font_size || 13) + "px";
   const profileStatus = $("#terminalProfileText");
-  if (profileStatus) {
-    const label = (config.color_scheme || "midnight");
-    profileStatus.textContent = label.charAt(0).toUpperCase() + label.slice(1) + " · " + (config.font_size || 13) + "px";
-  }
+  if (profileStatus) profileStatus.textContent = "兼容配色 · " + (config.font_size || 13) + "px";
   const encodingStatus = $("#terminalEncodingText");
   if (encodingStatus) encodingStatus.textContent = config.encoding || "UTF-8";
 }
@@ -2079,14 +2081,25 @@ function applyTerminalProfile(session, terminal) {
 function positionTerminalCursor(terminal, visible) {
   const cursor = $("#terminalCursor");
   const model = terminal.cursorModel(visible);
+  const metrics = terminalCellMetrics();
+  const left = metrics.paddingLeft + model.col * metrics.charWidth;
+  const top = metrics.paddingTop + model.row * metrics.lineHeight;
+  const imeInput = $("#terminalImeInput");
+  if (imeInput) {
+    imeInput.style.left = left + "px";
+    imeInput.style.top = top + "px";
+    imeInput.style.width = Math.max(2, metrics.charWidth) + "px";
+    imeInput.style.height = metrics.lineHeight + "px";
+    imeInput.style.fontFamily = getComputedStyle($("#terminalText")).fontFamily;
+    imeInput.style.fontSize = getComputedStyle($("#terminalText")).fontSize;
+  }
   if (!model.visible) {
     cursor.classList.remove("is-visible");
     return;
   }
-  const metrics = terminalCellMetrics();
   cursor.dataset.cursorStyle = model.style;
-  cursor.style.left = (metrics.paddingLeft + model.col * metrics.charWidth) + "px";
-  cursor.style.top = (metrics.paddingTop + model.row * metrics.lineHeight) + "px";
+  cursor.style.left = left + "px";
+  cursor.style.top = top + "px";
   cursor.style.width = metrics.charWidth + "px";
   cursor.style.height = metrics.lineHeight + "px";
   cursor.classList.add("is-visible");
@@ -2265,7 +2278,6 @@ function openProfileDialog(profile = null) {
   $("#profileTerminalEncoding").value = terminal.encoding;
   $("#profileTerminalFontFamily").value = terminal.font_family;
   $("#profileTerminalFontSize").value = terminal.font_size;
-  $("#profileTerminalColorScheme").value = terminal.color_scheme;
   $("#profileTerminalScrollback").value = terminal.scrollback_lines;
   $("#profileTerminalCursorStyle").value = terminal.cursor_style;
   $("#profileFavorite").checked = editing ? !!profile.favorite : false;
@@ -2440,7 +2452,7 @@ function profileFromForm() {
       encoding: $("#profileTerminalEncoding").value.trim() || DEFAULT_TERMINAL_CONFIG.encoding,
       font_family: $("#profileTerminalFontFamily").value.trim() || DEFAULT_TERMINAL_CONFIG.font_family,
       font_size: Number($("#profileTerminalFontSize").value || DEFAULT_TERMINAL_CONFIG.font_size),
-      color_scheme: $("#profileTerminalColorScheme").value || DEFAULT_TERMINAL_CONFIG.color_scheme,
+      color_scheme: existing && existing.terminal ? existing.terminal.color_scheme || DEFAULT_TERMINAL_CONFIG.color_scheme : DEFAULT_TERMINAL_CONFIG.color_scheme,
       scrollback_lines: Number($("#profileTerminalScrollback").value || DEFAULT_TERMINAL_CONFIG.scrollback_lines),
       cursor_style: $("#profileTerminalCursorStyle").value || DEFAULT_TERMINAL_CONFIG.cursor_style
     },
@@ -2927,6 +2939,18 @@ async function sendTerminalData(data) {
   await writeSessionData(session.id, data);
 }
 
+function focusTerminalInput() {
+  const input = $("#terminalImeInput");
+  if (!input || $("#sessionView").classList.contains("is-hidden")) return;
+  if (document.activeElement === input) return;
+  input.value = "";
+  try {
+    input.focus({ preventScroll: true });
+  } catch (_) {
+    input.focus();
+  }
+}
+
 function xtermModifier(event) {
   let modifier = 1;
   if (event.shiftKey) modifier += 1;
@@ -2937,6 +2961,7 @@ function xtermModifier(event) {
 }
 
 function keySequence(event, terminal = null) {
+  if (event.getModifierState && event.getModifierState("AltGraph") && event.key.length === 1) return null;
   if (event.ctrlKey && event.key === "Backspace") return "\u0017";
   if (event.key === "Tab" && event.shiftKey) return "\u001b[Z";
 
@@ -3262,7 +3287,39 @@ function bindEvents() {
   applySidebarCollapsed(window.localStorage.getItem("ssh-client.sidebar-collapsed") === "1", false);
 
   const viewport = $("#terminalViewport");
+  const imeInput = $("#terminalImeInput");
+
+  imeInput.addEventListener("compositionstart", () => {
+    terminalImeComposing = true;
+    terminalImeSuppressInput = false;
+  });
+  imeInput.addEventListener("compositionend", async (event) => {
+    terminalImeComposing = false;
+    const text = imeInput.value || event.data || "";
+    imeInput.value = "";
+    if (!text) return;
+    terminalImeSuppressInput = true;
+    await sendTerminalData(text);
+    window.setTimeout(() => { terminalImeSuppressInput = false; }, 0);
+  });
+  imeInput.addEventListener("input", async (event) => {
+    if (terminalImeComposing || event.isComposing) return;
+    if (terminalImeSuppressInput) {
+      imeInput.value = "";
+      return;
+    }
+    const text = imeInput.value;
+    imeInput.value = "";
+    if (text) await sendTerminalData(text);
+  });
+  viewport.addEventListener("click", () => {
+    const selection = window.getSelection();
+    if (selection && selection.toString()) return;
+    focusTerminalInput();
+  });
+
   viewport.addEventListener("keydown", async (event) => {
+    if (event.isComposing || event.key === "Process" || event.keyCode === 229) return;
     const key = event.key.toLowerCase();
     const session = activeSession();
     const terminal = session ? terminalFor(session.id) : null;
@@ -3334,7 +3391,9 @@ function bindEvents() {
     }
   });
 
-  viewport.addEventListener("focus", () => {
+  viewport.addEventListener("focusin", () => {
+    if (terminalFocusInside) return;
+    terminalFocusInside = true;
     const session = activeSession();
     if (!session) return;
     const terminal = terminalFor(session.id);
@@ -3344,7 +3403,9 @@ function bindEvents() {
     }
   });
 
-  viewport.addEventListener("blur", () => {
+  viewport.addEventListener("focusout", (event) => {
+    if (event.relatedTarget && viewport.contains(event.relatedTarget)) return;
+    terminalFocusInside = false;
     const session = activeSession();
     if (!session) return;
     const terminal = terminalFor(session.id);
@@ -3358,7 +3419,7 @@ function bindEvents() {
     const sequence = terminalMouseSequence(event, "down");
     if (!sequence) return;
     event.preventDefault();
-    viewport.focus();
+    focusTerminalInput();
     writeSessionData(activeSession().id, sequence, true);
   });
 
@@ -3409,7 +3470,7 @@ function bindEvents() {
   resizeObserver.observe(viewport);
 
   window.addEventListener("keydown", (event) => {
-    const terminalFocused = document.activeElement === viewport;
+    const terminalFocused = viewport.contains(document.activeElement);
     if (terminalFocused) return;
 
     if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "k") {

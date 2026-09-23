@@ -91,11 +91,12 @@
         <div id="terminalViewport" class="terminal-viewport" tabindex="0" aria-label="SSH 终端">
           <pre id="terminalText" class="terminal-text"></pre>
           <div id="terminalCursor" class="terminal-cursor" aria-hidden="true"></div>
+          <textarea id="terminalImeInput" class="terminal-ime-input" tabindex="-1" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="终端输入"></textarea>
         </div>
         <footer class="terminal-statusbar">
           <span id="terminalStateText">SSH</span>
           <span id="terminalSizeText">80 × 24</span>
-          <span id="terminalProfileText">Midnight · 13px</span>
+          <span id="terminalProfileText">兼容配色 · 13px</span>
           <span id="terminalEncodingText">UTF-8</span>
         </footer>
       </div>
@@ -194,13 +195,10 @@
         <label class="dk-field">回滚行数
           <input id="profileTerminalScrollback" type="number" min="100" max="100000" step="100" value="10000">
         </label>
-        <label class="dk-field">终端配色
-          <select id="profileTerminalColorScheme">
-            <option value="midnight">Midnight</option>
-            <option value="graphite">Graphite</option>
-            <option value="daylight">Daylight</option>
-          </select>
-        </label>
+        <div class="profile-terminal-compat-note dk-field is-span-2">
+          <span>终端配色</span>
+          <small>使用固定兼容配色，不跟随应用主题，避免影响 ANSI / 全屏终端程序显示。</small>
+        </div>
         <label class="dk-field">光标
           <select id="profileTerminalCursorStyle">
             <option value="bar">Bar</option>

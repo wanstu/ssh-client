@@ -193,10 +193,10 @@
 
 ## 15. Desktop UX
 
-- Midnight / Graphite / Daylight 可切换。
-- 应用主题不强制覆盖 Terminal Theme。
+- Terminal 使用固定兼容配色，不由应用主题重写 ANSI / OSC 基础色。
+- Windows WebView2 下终端应支持中文 IME composition，普通 shell 与 vim/tmux 内均可输入中文。
 - Comfortable / Compact 不造成文字截断。
-- Ctrl+K 可键盘操作。
+- Ctrl+K 可键盘操作，命令面板必须使用完整主题样式而非浏览器默认控件样式。
 - 所有 Modal 可 Escape 关闭，但高风险确认状态的关闭语义必须等于 Cancel / Keep blocked。
 
 ## 16. Release Gate

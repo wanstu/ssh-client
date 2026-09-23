@@ -806,7 +806,8 @@ button, input, select {
   cursor: text;
 }
 
-.terminal-viewport:focus {
+.terminal-viewport:focus,
+.terminal-viewport:focus-within {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dk-primary) 20%, transparent);
 }
 
@@ -899,7 +900,26 @@ button, input, select {
   display: block;
 }
 
-.terminal-viewport:not(:focus) .terminal-cursor {
+.terminal-ime-input {
+  position: absolute;
+  z-index: 5;
+  width: 2px;
+  height: 1em;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  opacity: .01;
+  pointer-events: none;
+  white-space: pre;
+}
+
+.terminal-viewport:not(:focus-within) .terminal-cursor {
   opacity: .55;
 }
 
@@ -940,8 +960,11 @@ button, input, select {
 }
 
 .dk-dialog {
+  border: 1px solid color-mix(in srgb, var(--dk-border) 82%, transparent);
+  border-radius: 14px;
   background: var(--dk-bg-elevated);
   color: var(--dk-text);
+  box-shadow: var(--dk-shadow-dialog);
   font-size: 14px;
 }
 
@@ -980,7 +1003,27 @@ button, input, select {
   color: var(--dk-text-muted);
   font-size: 11px;
   line-height: 1.45;
+}
 
+.profile-terminal-compat-note {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--dk-border) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--dk-bg-muted) 48%, transparent);
+}
+
+.profile-terminal-compat-note > span {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.profile-terminal-compat-note small {
+  color: var(--dk-text-muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
 
 .compact-dialog {
   width: min(560px, 92vw);
