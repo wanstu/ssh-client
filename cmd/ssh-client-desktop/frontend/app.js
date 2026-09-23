@@ -512,8 +512,10 @@ class TerminalBuffer {
 
   backspace() {
     this.wrapPending = false;
+    // BS is a terminal cell movement, not a Unicode-character movement.
+    // A full-width CJK glyph occupies two cells and remote line editors will
+    // emit two BS characters when they need to move across that glyph.
     if (this.col > 0) this.col--;
-    if (this.screen[this.row][this.col] === "" && this.col > 0) this.col--;
   }
 
   nextTab(count = 1) {
