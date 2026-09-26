@@ -154,10 +154,21 @@
 
 ## 12. Terminal
 
-- resize 正常。
-- UTF-8 正常。
+- resize 使用实际字体字符宽度、line-height 与 viewport padding 计算 PTY 行列，并合并高频 resize。
+- UTF-8 / CJK 宽字符正常；combining character 不额外占列。复杂 ZWJ emoji、旗帜 emoji和 East Asian Ambiguous Width 仍属于近似兼容范围。
+- ANSI SGR 支持基础/bright 16 色、256 色、True Color，以及 bold / dim / italic / underline / inverse / hidden / strike。
+- 光标使用终端内容流中的真实 DOM 锚点定位，并固定渲染为 Windows 风格 1px 单竖线；不得用 `col × 估算字符宽度` 直接决定可见光标位置，失焦时降低亮度。
+- scrollback 有上限配置，并保留屏幕滚动时的 SGR 样式。
+- alternate screen 支持 DEC 47 / 1047 / 1048 / 1049，退出后恢复 main screen、cursor 与相关状态。
+- autowrap 使用 wrap-pending 语义；关闭 DEC ?7 后右边界不会错误滚屏。
+- 支持 IRM、DECOM、DECSTBM，并在 Origin Mode 下把光标限制在 scroll region。
+- 支持 application cursor / application keypad、F1-F12、Home/End/Insert/Delete/Page、方向键组合修饰键与 Shift+Tab。
+- 支持 bracketed paste、focus reporting、mouse 1000 / 1002 / 1003 / 1006；按住 Shift 时保留本地选择和右键菜单。
+- 支持 DEC Special Graphics、G0/G1/G2/G3、SO/SI，TUI 边框不应退化为 l/q/x 等字符。
+- Tab Stop 支持默认 8 列、HTS、TBC、CHT、CBT。
+- CSI 2 J 只清屏，不擅自移动光标；CSI 3 J 同时清 scrollback。
+- 支持常见 DSR / DA / DECID / DECRQM 与 OSC 10/11/12 query response；OSC 缓冲有长度上限。
 - copy / paste 正常。
-- scrollback 有上限配置。
 - Ctrl+L 只清显示，不代表服务器执行清理。
 - Split pane 独立 Shell。
 - 第一阶段只左右二分。
@@ -182,10 +193,12 @@
 
 ## 15. Desktop UX
 
-- Midnight / Graphite / Daylight 可切换。
-- 应用主题不强制覆盖 Terminal Theme。
+- Terminal 使用固定兼容配色，不由应用主题重写 ANSI / OSC 基础色。
+- Windows WebView2 下终端应支持中文 IME composition，普通 shell 与 vim/tmux 内均可输入中文；连续中文使用 Backspace 时每次只删除一个字符，不得因双宽字符列移动而误删前一个字符。
+- 调整窗口高度时普通 Shell 内容不得产生大段空白或重复 prompt；缩小时优先裁剪光标以下区域，而不是无条件把顶部内容滚入 scrollback。
+- 终端字体由 Desktop 控制；英文使用配置的等宽字体，中文使用稳定的 CJK fallback，并关闭代码字体连字以保证单元格布局。CJK/全角字符的 DOM 渲染宽度必须固定为两个 terminal cells，避免 fallback 字体实际像素宽度导致光标累计漂移。
 - Comfortable / Compact 不造成文字截断。
-- Ctrl+K 可键盘操作。
+- Ctrl+K 可键盘操作，命令面板必须使用完整主题样式而非浏览器默认控件样式。
 - 所有 Modal 可 Escape 关闭，但高风险确认状态的关闭语义必须等于 Cancel / Keep blocked。
 
 ## 16. Release Gate

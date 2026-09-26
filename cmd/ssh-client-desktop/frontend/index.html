@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="/desktopkit/components.css">
   <link rel="stylesheet" href="/desktopkit/navigation.css">
   <link rel="stylesheet" href="styles.css">
+  <script src="/desktopkit/about.js" data-desktopkit-about></script>
   <script src="/desktopkit/theme.js"></script>
 </head>
 <body>
@@ -23,6 +24,7 @@
     </div>
     <div class="rail-bottom">
       <button id="quickConnectButton" class="rail-button" title="快速连接">⚡</button>
+      <button id="aboutButton" class="rail-button" title="关于">ⓘ</button>
       <button id="settingsButton" class="rail-button" title="设置">⚙</button>
     </div>
   </nav>
@@ -90,12 +92,14 @@
         <div id="sessionBanner" class="session-banner is-hidden"></div>
         <div id="terminalViewport" class="terminal-viewport" tabindex="0" aria-label="SSH 终端">
           <pre id="terminalText" class="terminal-text"></pre>
-          <div id="terminalCursor" class="terminal-cursor"></div>
+          <div id="terminalCursor" class="terminal-cursor" aria-hidden="true"></div>
+          <textarea id="terminalImeInput" class="terminal-ime-input" tabindex="-1" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="终端输入"></textarea>
         </div>
         <footer class="terminal-statusbar">
           <span id="terminalStateText">SSH</span>
           <span id="terminalSizeText">80 × 24</span>
-          <span>UTF-8</span>
+          <span id="terminalProfileText">兼容配色 · 13px</span>
+          <span id="terminalEncodingText">UTF-8</span>
         </footer>
       </div>
 
@@ -169,6 +173,41 @@
       </div>
       <label class="dk-field is-span-2">标签<input id="profileTags" autocomplete="off" placeholder="Web, Linux, 生产环境"></label>
     </div>
+
+    <section class="profile-terminal-section" aria-labelledby="profileTerminalHeading">
+      <div class="profile-section-heading">
+        <div>
+          <strong id="profileTerminalHeading">终端配置</strong>
+          <small>终端配色与应用主题独立，配置会在新建和已打开的会话中应用。</small>
+        </div>
+      </div>
+      <div class="dk-form-grid">
+        <label class="dk-field">TERM
+          <input id="profileTerminalTerm" autocomplete="off" value="xterm-256color">
+        </label>
+        <label class="dk-field">编码
+          <input id="profileTerminalEncoding" autocomplete="off" value="UTF-8">
+        </label>
+        <label class="dk-field is-span-2">字体
+          <input id="profileTerminalFontFamily" autocomplete="off" value="Cascadia Code">
+        </label>
+        <label class="dk-field">字号
+          <input id="profileTerminalFontSize" type="number" min="10" max="28" value="13">
+        </label>
+        <label class="dk-field">回滚行数
+          <input id="profileTerminalScrollback" type="number" min="100" max="100000" step="100" value="10000">
+        </label>
+        <div class="profile-terminal-compat-note dk-field is-span-2">
+          <span>终端配色</span>
+          <small>使用固定兼容配色，不跟随应用主题，避免影响 ANSI / 全屏终端程序显示。</small>
+        </div>
+        <div class="profile-terminal-compat-note dk-field is-span-2">
+          <span>光标</span>
+          <small>固定使用 Windows 风格单竖线光标。</small>
+        </div>
+      </div>
+    </section>
+
     <label class="dk-setting-row">
       <span><strong>加入收藏</strong><small>收藏与分组是两个独立维度。</small></span>
       <input id="profileFavorite" class="dk-switch" type="checkbox">
@@ -328,6 +367,30 @@
     <div class="dialog-actions">
       <button class="dk-button dk-button-secondary" value="cancel" type="submit">关闭</button>
       <button id="saveSettingsButton" class="dk-button dk-button-primary" type="button">保存设置</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="aboutDialog" class="dk-dialog compact-dialog about-dialog">
+  <form class="dk-stack" method="dialog">
+    <div class="dialog-heading">
+      <div><h2>关于 SSH Client</h2><p>应用版本与构建信息</p></div>
+      <button class="dk-button dk-button-ghost compact-button" value="cancel" type="submit" aria-label="关闭">×</button>
+    </div>
+    <div class="about-product">
+      <div class="about-product-icon">&gt;_</div>
+      <div>
+        <strong>SSH Client</strong>
+        <span id="aboutVersion">读取版本中…</span>
+      </div>
+    </div>
+    <div class="about-details">
+      <div><span>版本</span><code id="aboutVersionDetail">读取中…</code></div>
+      <div><span>Commit</span><code id="aboutCommit">读取中…</code></div>
+      <div><span>Windows 文件版本</span><code id="aboutProductVersion">读取中…</code></div>
+    </div>
+    <div class="dialog-actions">
+      <button class="dk-button dk-button-primary" value="cancel" type="submit">关闭</button>
     </div>
   </form>
 </dialog>

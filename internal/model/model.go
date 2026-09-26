@@ -93,7 +93,7 @@ func DefaultProfile() ConnectionProfile {
 		Network: NetworkConfig{Mode: "direct", TimeoutSec: 10, KeepaliveSec: 30},
 		Terminal: TerminalConfig{
 			Term: "xterm-256color", Encoding: "UTF-8", FontFamily: "Cascadia Code", FontSize: 13,
-			ColorScheme: "midnight", ScrollbackLines: 10000, CursorStyle: "block",
+			ColorScheme: "midnight", ScrollbackLines: 10000, CursorStyle: "bar",
 		},
 		Reconnect: ReconnectConfig{Enabled: true, KeepTabOnDisconnect: true},
 		Source:    SourceInfo{Kind: "manual"},

@@ -97,6 +97,29 @@ func TestManagerDirectPasswordSession(t *testing.T) {
 	}
 }
 
+func TestEncodeTerminalInput(t *testing.T) {
+	utf8Payload, err := encodeTerminalInput("中文", "UTF-8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(utf8Payload) != "中文" {
+		t.Fatalf("UTF-8 input changed: %x", utf8Payload)
+	}
+
+	gbkPayload, err := encodeTerminalInput("中文", "GBK")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantGBK := []byte{0xD6, 0xD0, 0xCE, 0xC4}
+	if string(gbkPayload) != string(wantGBK) {
+		t.Fatalf("GBK input = %x, want %x", gbkPayload, wantGBK)
+	}
+
+	if _, err := encodeTerminalInput("test", "not-a-real-encoding"); err == nil {
+		t.Fatal("expected unsupported encoding error")
+	}
+}
+
 func startTestSSHServer(t *testing.T) (string, func()) {
 	t.Helper()
 	_, private, err := ed25519.GenerateKey(rand.Reader)

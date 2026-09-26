@@ -241,3 +241,38 @@ func TestCredentialClearedAfterSuccessfulOptOut(t *testing.T) {
 		t.Fatalf("credential ref was not cleared: %#v", settings.Profiles[0].Auth)
 	}
 }
+
+func TestNormalizeProfileTerminalSettings(t *testing.T) {
+	profile := model.DefaultProfile()
+	profile.Terminal.FontSize = 48
+	profile.Terminal.ScrollbackLines = 10
+	profile.Terminal.ColorScheme = "unknown"
+	profile.Terminal.CursorStyle = "box"
+
+	normalized := normalizeProfile(profile)
+	defaults := model.DefaultProfile()
+	if normalized.Terminal.FontSize != defaults.Terminal.FontSize {
+		t.Fatalf("font size = %d, want %d", normalized.Terminal.FontSize, defaults.Terminal.FontSize)
+	}
+	if normalized.Terminal.ScrollbackLines != defaults.Terminal.ScrollbackLines {
+		t.Fatalf("scrollback = %d, want %d", normalized.Terminal.ScrollbackLines, defaults.Terminal.ScrollbackLines)
+	}
+	if normalized.Terminal.ColorScheme != "midnight" {
+		t.Fatalf("color scheme = %q", normalized.Terminal.ColorScheme)
+	}
+	if normalized.Terminal.CursorStyle != "bar" {
+		t.Fatalf("cursor style = %q", normalized.Terminal.CursorStyle)
+	}
+
+	profile.Terminal.FontSize = 10
+	profile.Terminal.ScrollbackLines = 100000
+	profile.Terminal.ColorScheme = "DAYLIGHT"
+	profile.Terminal.CursorStyle = "UNDERLINE"
+	normalized = normalizeProfile(profile)
+	if normalized.Terminal.FontSize != 10 || normalized.Terminal.ScrollbackLines != 100000 {
+		t.Fatalf("valid terminal numeric settings changed: %#v", normalized.Terminal)
+	}
+	if normalized.Terminal.ColorScheme != "daylight" || normalized.Terminal.CursorStyle != "underline" {
+		t.Fatalf("valid terminal enum settings changed: %#v", normalized.Terminal)
+	}
+}

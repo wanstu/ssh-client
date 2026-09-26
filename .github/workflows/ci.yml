@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   desktop:
-    uses: wanstu/wails-desktop-kit/.github/workflows/wails-desktop.yml@v0.8.0
+    uses: wanstu/wails-desktop-kit/.github/workflows/wails-desktop.yml@v0.9.0
     with:
       app-name: ssh-client
       desktop-dir: cmd/ssh-client-desktop
