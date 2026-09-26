@@ -13,6 +13,10 @@ import {
   QuickConnect,
   WriteSession,
   ResizeSession,
+  OpenPane,
+  WritePane,
+  ResizePane,
+  ClosePane,
   RetrySession,
   DisconnectSession,
   CloseSession,
@@ -48,6 +52,9 @@ const state = {
   nav: "connections",
   terminals: new Map(),
   decoders: new Map(),
+  splitPanes: new Map(),
+  activePaneBySession: new Map(),
+  pendingSplitSessions: new Set(),
   pendingProfile: null,
   pendingHostKey: null,
   pendingQuickSaves: new Map(),
@@ -1013,19 +1020,34 @@ function terminalConfigForSession(sessionOrId) {
   return { ...DEFAULT_TERMINAL_CONFIG, ...((profile && profile.terminal) || {}) };
 }
 
-function terminalFor(sessionId) {
+function terminalRuntimeKey(sessionId, paneId = "") {
+  return paneId ? sessionId + "::" + paneId : sessionId;
+}
+
+function terminalFor(sessionId, paneId = "") {
   const config = terminalConfigForSession(sessionId);
-  let terminal = state.terminals.get(sessionId);
+  const key = terminalRuntimeKey(sessionId, paneId);
+  let terminal = state.terminals.get(key);
   if (!terminal) {
     terminal = new TerminalBuffer(100, 30, config.scrollback_lines, {
       cursorStyle: config.cursor_style,
       colorScheme: config.color_scheme
     });
-    state.terminals.set(sessionId, terminal);
+    state.terminals.set(key, terminal);
   } else {
     terminal.setConfig(config);
   }
   return terminal;
+}
+
+function splitPaneForSession(sessionId) {
+  return state.splitPanes.get(sessionId) || null;
+}
+
+function activePaneId(sessionId = state.activeSessionId) {
+  const split = splitPaneForSession(sessionId);
+  const paneId = state.activePaneBySession.get(sessionId) || "";
+  return split && paneId === split.id ? paneId : "";
 }
 
 function showToast(message) {
@@ -1250,9 +1272,9 @@ function applySidebarCollapsed(collapsed, persist = true) {
   scheduleSidebarTerminalResize();
 }
 
-function terminalSelectionText() {
+function terminalSelectionText(paneId = activePaneId()) {
   const selection = window.getSelection();
-  const viewport = $("#terminalViewport");
+  const viewport = paneElements(paneId).viewport;
   if (!selection || selection.isCollapsed || !selection.anchorNode || !selection.focusNode) return "";
   if (!viewport.contains(selection.anchorNode) || !viewport.contains(selection.focusNode)) return "";
   return selection.toString();
@@ -1300,28 +1322,28 @@ function normalizePasteText(text) {
   return String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
-async function sendTerminalPaste(text) {
+async function sendTerminalPaste(text, paneId = activePaneId()) {
   const session = activeSession();
   if (!session || session.state !== "connected") return;
   const normalized = normalizePasteText(text);
   if (!normalized) return;
 
-  const terminal = terminalFor(session.id);
+  const terminal = terminalFor(session.id, paneId);
   const payload = terminal.bracketedPaste
     ? "\u001b[200~" + normalized + "\u001b[201~"
     : normalized;
-  await sendTerminalData(payload);
+  await sendTerminalData(payload, paneId);
 }
 
-async function pasteTerminalClipboard() {
+async function pasteTerminalClipboard(paneId = activePaneId()) {
   const text = await readClipboardText();
   if (!text) return;
-  await sendTerminalPaste(text);
-  focusTerminalInput();
+  await sendTerminalPaste(text, paneId);
+  focusTerminalInput(paneId);
 }
 
-function selectAllTerminalText() {
-  const text = $("#terminalText");
+function selectAllTerminalText(paneId = activePaneId()) {
+  const text = paneElements(paneId).text;
   if (!text.textContent) return;
   const range = document.createRange();
   range.selectNodeContents(text);
@@ -1334,9 +1356,10 @@ function hideTerminalContextMenu() {
   $("#terminalContextMenu").classList.add("is-hidden");
 }
 
-function showTerminalContextMenu(event) {
+function showTerminalContextMenu(event, paneId = activePaneId()) {
+  setActivePane(paneId);
   const menu = $("#terminalContextMenu");
-  state.terminalContextSelection = terminalSelectionText();
+  state.terminalContextSelection = terminalSelectionText(paneId);
   const copyButton = menu.querySelector('[data-terminal-action="copy"]');
   copyButton.disabled = !state.terminalContextSelection;
   menu.classList.remove("is-hidden");
@@ -1373,6 +1396,20 @@ function buildCommandItems() {
       meta: "切换",
       keywords: [session.name, session.target, session.state].join(" "),
       action: () => selectSession(session.id)
+    });
+  }
+
+  const currentSession = activeSession();
+  if (currentSession && currentSession.state === "connected" && !currentSession.history_only) {
+    const split = splitPaneForSession(currentSession.id);
+    items.push({
+      kind: "操作",
+      icon: split ? "▥" : "◫",
+      label: split ? "切换到第二终端" : "左右拆分当前终端",
+      detail: split ? "聚焦 shell · 2" : "复用当前 SSH 连接并打开独立 Shell Channel",
+      meta: "Alt \\",
+      keywords: "split pane shell 分屏 拆分 终端",
+      action: () => split ? setActivePane(split.id) : openSplitPane()
     });
   }
 
@@ -1810,7 +1847,7 @@ function terminalRowText(terminal, rowIndex = terminal.row) {
   return row.join("").replace(/\s+$/, "");
 }
 
-function observeRemotePrompt(sessionId, terminal) {
+function observeRemotePrompt(sessionId, terminal, paneId = "") {
   if (!terminal || terminal.alternateScreen) return;
 
   const raw = (terminal.screen[terminal.row] || [])
@@ -1819,17 +1856,18 @@ function observeRemotePrompt(sessionId, terminal) {
   const trimmed = raw.trimEnd();
   if (!trimmed || !/(?:[$#>%]|❯|➜|λ)$/.test(trimmed)) return;
 
-  const existing = state.promptPrefixes.get(sessionId) || "";
+  const key = terminalRuntimeKey(sessionId, paneId);
+  const existing = state.promptPrefixes.get(key) || "";
   if (existing && raw.startsWith(existing) && raw.length > existing.length) {
     return;
   }
-  state.promptPrefixes.set(sessionId, raw);
+  state.promptPrefixes.set(key, raw);
 }
 
-function captureRenderedCommand(session, terminal) {
+function captureRenderedCommand(session, terminal, paneId = "") {
   if (!session || !terminal || session.history_only || terminal.alternateScreen) return;
 
-  const prefix = state.promptPrefixes.get(session.id);
+  const prefix = state.promptPrefixes.get(terminalRuntimeKey(session.id, paneId));
   if (!prefix) return;
 
   const line = terminalRowText(terminal);
@@ -2027,7 +2065,81 @@ function renderActiveSession() {
   $("#retrySessionButton").classList.toggle("is-hidden", session.state !== "reconnecting");
   $("#disconnectSessionButton").classList.toggle("is-hidden", !!session.history_only);
   $("#disconnectSessionButton").disabled = !!session.history_only || ["disconnected", "failed", "security_blocked"].includes(session.state);
+  const split = splitPaneForSession(session.id);
+  $("#splitSessionButton").classList.toggle("is-hidden", !!session.history_only);
+  $("#splitSessionButton").disabled = !!session.history_only || session.state !== "connected";
+  $("#splitSessionButton").textContent = split ? "切换分屏" : "左右分屏";
   renderTerminal();
+}
+
+function setActivePane(paneId = "") {
+  const session = activeSession();
+  if (!session) return;
+  const split = splitPaneForSession(session.id);
+  const next = split && paneId === split.id ? paneId : "";
+  const changed = activePaneId(session.id) !== next;
+  state.activePaneBySession.set(session.id, next);
+  $("#primaryTerminalPane").classList.toggle("is-active", !next);
+  $("#splitTerminalPane").classList.toggle("is-active", !!next);
+  const terminal = terminalFor(session.id, next);
+  const splitCount = split ? " · 双终端" : "";
+  $("#terminalSizeText").textContent = terminal.cols + " × " + terminal.rows + splitCount;
+  if (changed) window.setTimeout(() => focusTerminalInput(next), 0);
+}
+
+async function openSplitPane() {
+  const session = activeSession();
+  if (!session || session.history_only || session.state !== "connected") return;
+  if (splitPaneForSession(session.id)) {
+    setActivePane(splitPaneForSession(session.id).id);
+    return;
+  }
+  const primary = paneElements("");
+  const size = calculateTerminalSize(primary.viewport, primary.text);
+  const cols = Math.max(20, Math.floor(size.cols / 2));
+  state.pendingSplitSessions.add(session.id);
+  try {
+    const pane = await OpenPane(session.id, cols, size.rows);
+    state.splitPanes.set(session.id, pane);
+    state.activePaneBySession.set(session.id, pane.id);
+    terminalFor(session.id, pane.id);
+    renderActiveSession();
+    scheduleActiveTerminalResize();
+    window.setTimeout(() => focusTerminalInput(pane.id), 0);
+  } catch (error) {
+    showToast("拆分终端失败：" + error);
+  } finally {
+    state.pendingSplitSessions.delete(session.id);
+  }
+}
+
+function removeSplitPaneState(sessionId, paneId = "") {
+  const pane = splitPaneForSession(sessionId);
+  if (!pane || (paneId && pane.id !== paneId)) return;
+  const key = terminalRuntimeKey(sessionId, pane.id);
+  state.splitPanes.delete(sessionId);
+  state.activePaneBySession.set(sessionId, "");
+  state.terminals.delete(key);
+  state.decoders.delete(key);
+  state.promptPrefixes.delete(key);
+  if (sessionId === state.activeSessionId) {
+    renderActiveSession();
+    scheduleActiveTerminalResize();
+    window.setTimeout(() => focusTerminalInput(""), 0);
+  }
+}
+
+async function closeSplitPane() {
+  const session = activeSession();
+  if (!session) return;
+  const pane = splitPaneForSession(session.id);
+  if (!pane) return;
+  try {
+    await ClosePane(session.id, pane.id);
+  } catch (error) {
+    showToast(String(error));
+  }
+  removeSplitPaneState(session.id, pane.id);
 }
 
 function stateLabel(value) {
@@ -2070,11 +2182,12 @@ function renderTerminalContent(element, terminal) {
   const fragment = document.createDocumentFragment();
   const rows = terminal.renderRows();
   const cursorModel = terminal.cursorModel(true);
+  let cursorAnchor = null;
   const appendCursorAnchor = () => {
     const anchor = document.createElement("span");
-    anchor.id = "terminalCursorAnchor";
     anchor.className = "terminal-cursor-anchor";
     anchor.setAttribute("aria-hidden", "true");
+    cursorAnchor = anchor;
     fragment.append(anchor);
   };
 
@@ -2134,13 +2247,12 @@ function renderTerminalContent(element, terminal) {
     if (rowIndex < rows.length - 1) fragment.append(document.createTextNode("\n"));
   });
   element.replaceChildren(fragment);
+  return cursorAnchor;
 }
 
-function applyTerminalProfile(session, terminal) {
+function applyTerminalProfile(session, terminal, viewport, text, updateStatus = false) {
   const config = terminalConfigForSession(session);
   terminal.setConfig(config);
-  const viewport = $("#terminalViewport");
-  const text = $("#terminalText");
   // Keep the emulator palette fixed so ANSI/OSC behaviour stays predictable.
   // Application themes intentionally do not recolor the terminal surface.
   viewport.dataset.terminalScheme = "midnight";
@@ -2151,18 +2263,17 @@ function applyTerminalProfile(session, terminal) {
   // full-width glyph metrics much closer to two terminal cells.
   text.style.fontFamily = '"' + requestedFont + '", "Cascadia Mono", "Cascadia Code", Consolas, "NSimSun", "SimSun", monospace';
   text.style.fontSize = String(config.font_size || 13) + "px";
-  const profileStatus = $("#terminalProfileText");
-  if (profileStatus) profileStatus.textContent = "兼容配色 · " + requestedFont + " · " + (config.font_size || 13) + "px";
-  const encodingStatus = $("#terminalEncodingText");
-  if (encodingStatus) encodingStatus.textContent = config.encoding || "UTF-8";
+  if (updateStatus) {
+    const profileStatus = $("#terminalProfileText");
+    if (profileStatus) profileStatus.textContent = "兼容配色 · " + requestedFont + " · " + (config.font_size || 13) + "px";
+    const encodingStatus = $("#terminalEncodingText");
+    if (encodingStatus) encodingStatus.textContent = config.encoding || "UTF-8";
+  }
 }
 
-function positionTerminalCursor(terminal, visible) {
-  const legacyCursor = $("#terminalCursor");
-  const viewport = $("#terminalViewport");
+function positionTerminalCursor(terminal, visible, viewport, text, imeInput, anchor, legacyCursor = null) {
   const model = terminal.cursorModel(visible);
-  const metrics = terminalCellMetrics();
-  const anchor = $("#terminalCursorAnchor");
+  const metrics = terminalCellMetrics(viewport, text);
   if (legacyCursor) legacyCursor.classList.remove("is-visible");
   if (anchor) anchor.classList.toggle("is-visible", model.visible);
 
@@ -2174,31 +2285,62 @@ function positionTerminalCursor(terminal, visible) {
     left = anchorRect.left - viewportRect.left + viewport.scrollLeft;
     top = anchorRect.top - viewportRect.top + viewport.scrollTop;
   }
-  const imeInput = $("#terminalImeInput");
   if (imeInput) {
     imeInput.style.left = left + "px";
     imeInput.style.top = top + "px";
     imeInput.style.width = Math.max(2, metrics.charWidth) + "px";
     imeInput.style.height = metrics.lineHeight + "px";
-    imeInput.style.fontFamily = getComputedStyle($("#terminalText")).fontFamily;
-    imeInput.style.fontSize = getComputedStyle($("#terminalText")).fontSize;
+    imeInput.style.fontFamily = getComputedStyle(text).fontFamily;
+    imeInput.style.fontSize = getComputedStyle(text).fontSize;
   }
+}
+
+function paneElements(paneId = "") {
+  if (paneId) {
+    return {
+      pane: $("#splitTerminalPane"),
+      viewport: $("#splitTerminalViewport"),
+      text: $("#splitTerminalText"),
+      imeInput: $("#splitTerminalImeInput"),
+      legacyCursor: null
+    };
+  }
+  return {
+    pane: $("#primaryTerminalPane"),
+    viewport: $("#terminalViewport"),
+    text: $("#terminalText"),
+    imeInput: $("#terminalImeInput"),
+    legacyCursor: $("#terminalCursor")
+  };
+}
+
+function renderTerminalPane(session, paneId = "", updateStatus = false) {
+  const elements = paneElements(paneId);
+  const terminal = terminalFor(session.id, paneId);
+  applyTerminalProfile(session, terminal, elements.viewport, elements.text, updateStatus);
+  const stick = elements.viewport.scrollTop + elements.viewport.clientHeight >= elements.viewport.scrollHeight - 48;
+  const metrics = terminalCellMetrics(elements.viewport, elements.text);
+  elements.text.style.setProperty("--terminal-cell-width", metrics.charWidth + "px");
+  elements.text.style.setProperty("--terminal-line-height", metrics.lineHeight + "px");
+  const anchor = renderTerminalContent(elements.text, terminal);
+  positionTerminalCursor(terminal, session.state === "connected", elements.viewport, elements.text, elements.imeInput, anchor, elements.legacyCursor);
+  if (stick) window.requestAnimationFrame(() => { elements.viewport.scrollTop = elements.viewport.scrollHeight; });
 }
 
 function renderTerminal() {
   const session = activeSession();
   if (!session) return;
-  const viewport = $("#terminalViewport");
-  const terminal = terminalFor(session.id);
-  applyTerminalProfile(session, terminal);
-  const stick = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 48;
-  const terminalText = $("#terminalText");
-  const metrics = terminalCellMetrics();
-  terminalText.style.setProperty("--terminal-cell-width", metrics.charWidth + "px");
-  terminalText.style.setProperty("--terminal-line-height", metrics.lineHeight + "px");
-  renderTerminalContent(terminalText, terminal);
-  positionTerminalCursor(terminal, session.state === "connected");
-  if (stick) window.requestAnimationFrame(() => { viewport.scrollTop = viewport.scrollHeight; });
+  const split = splitPaneForSession(session.id);
+  const panes = $("#terminalPanes");
+  panes.classList.toggle("is-split", !!split);
+  $("#splitTerminalPane").classList.toggle("is-hidden", !split);
+  $("#splitTerminalPane").dataset.paneId = split ? split.id : "";
+  const currentPane = activePaneId(session.id);
+  $("#primaryTerminalPane").classList.toggle("is-active", !currentPane);
+  $("#splitTerminalPane").classList.toggle("is-active", !!currentPane);
+
+  renderTerminalPane(session, "", true);
+  if (split) renderTerminalPane(session, split.id, false);
 }
 
 function updateSession(snapshot) {
@@ -2250,10 +2392,11 @@ function updateSession(snapshot) {
   renderSidebar();
 }
 
-function decoderForSession(sessionId) {
+function decoderForSession(sessionId, paneId = "") {
   const config = terminalConfigForSession(sessionId);
   const encoding = String(config.encoding || "UTF-8").trim() || "UTF-8";
-  const cached = state.decoders.get(sessionId);
+  const key = terminalRuntimeKey(sessionId, paneId);
+  const cached = state.decoders.get(key);
   if (cached && cached.encoding.toLowerCase() === encoding.toLowerCase()) return cached.decoder;
 
   let sessionDecoder;
@@ -2262,15 +2405,15 @@ function decoderForSession(sessionId) {
   } catch (_) {
     sessionDecoder = new TextDecoder("utf-8");
   }
-  state.decoders.set(sessionId, { encoding, decoder: sessionDecoder });
+  state.decoders.set(key, { encoding, decoder: sessionDecoder });
   return sessionDecoder;
 }
 
-function decodeOutput(encoded, sessionId) {
+function decodeOutput(encoded, sessionId, paneId = "") {
   const binary = atob(encoded);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return decoderForSession(sessionId).decode(bytes, { stream: true });
+  return decoderForSession(sessionId, paneId).decode(bytes, { stream: true });
 }
 
 async function beginProfileConnection(profile) {
@@ -2979,9 +3122,7 @@ async function saveSettings() {
 let terminalResizeFrame = 0;
 let terminalMeasureCanvas = null;
 
-function terminalCellMetrics() {
-  const viewport = $("#terminalViewport");
-  const text = $("#terminalText");
+function terminalCellMetrics(viewport = $("#terminalViewport"), text = $("#terminalText")) {
   const style = getComputedStyle(text);
   const viewportStyle = getComputedStyle(viewport);
   const fontSize = Number.parseFloat(style.fontSize) || 13;
@@ -3004,9 +3145,8 @@ function terminalCellMetrics() {
   };
 }
 
-function calculateTerminalSize() {
-  const viewport = $("#terminalViewport");
-  const metrics = terminalCellMetrics();
+function calculateTerminalSize(viewport = $("#terminalViewport"), text = $("#terminalText")) {
+  const metrics = terminalCellMetrics(viewport, text);
   const width = Math.max(1, viewport.clientWidth - metrics.paddingLeft - metrics.paddingRight);
   const height = Math.max(1, viewport.clientHeight - metrics.paddingTop - metrics.paddingBottom);
   const cols = Math.max(20, Math.floor(width / metrics.charWidth));
@@ -3025,13 +3165,28 @@ function scheduleActiveTerminalResize() {
 async function resizeActiveTerminal() {
   const session = activeSession();
   if (!session) return;
-  const size = calculateTerminalSize();
-  const terminal = terminalFor(session.id);
-  terminal.resize(size.cols, size.rows);
-  $("#terminalSizeText").textContent = size.cols + " × " + size.rows;
+
+  const primary = paneElements("");
+  const primarySize = calculateTerminalSize(primary.viewport, primary.text);
+  terminalFor(session.id).resize(primarySize.cols, primarySize.rows);
+
+  const split = splitPaneForSession(session.id);
+  let splitSize = null;
+  if (split && !$("#splitTerminalPane").classList.contains("is-hidden")) {
+    const second = paneElements(split.id);
+    splitSize = calculateTerminalSize(second.viewport, second.text);
+    terminalFor(session.id, split.id).resize(splitSize.cols, splitSize.rows);
+  }
+
+  const activeSize = split && activePaneId(session.id) === split.id && splitSize ? splitSize : primarySize;
+  $("#terminalSizeText").textContent = activeSize.cols + " × " + activeSize.rows + (split ? " · 双终端" : "");
   renderTerminal();
+
   if (session.state === "connected") {
-    try { await ResizeSession(session.id, size.cols, size.rows); } catch (_) {}
+    try { await ResizeSession(session.id, primarySize.cols, primarySize.rows); } catch (_) {}
+    if (split && splitSize) {
+      try { await ResizePane(session.id, split.id, splitSize.cols, splitSize.rows); } catch (_) {}
+    }
   }
 }
 
@@ -3044,14 +3199,24 @@ async function writeSessionData(sessionId, data, quiet = false) {
   }
 }
 
-async function sendTerminalData(data) {
-  const session = activeSession();
-  if (!session || session.state !== "connected" || !data) return;
-  await writeSessionData(session.id, data);
+async function writePaneData(sessionId, paneId, data, quiet = false) {
+  if (!sessionId || !paneId || !data) return;
+  try {
+    await WritePane(sessionId, paneId, data);
+  } catch (error) {
+    if (!quiet) showToast(String(error));
+  }
 }
 
-function focusTerminalInput() {
-  const input = $("#terminalImeInput");
+async function sendTerminalData(data, paneId = activePaneId()) {
+  const session = activeSession();
+  if (!session || session.state !== "connected" || !data) return;
+  if (paneId) await writePaneData(session.id, paneId, data);
+  else await writeSessionData(session.id, data);
+}
+
+function focusTerminalInput(paneId = activePaneId()) {
+  const input = paneId ? $("#splitTerminalImeInput") : $("#terminalImeInput");
   if (!input || $("#sessionView").classList.contains("is-hidden")) return;
   if (document.activeElement === input) return;
   input.value = "";
@@ -3143,24 +3308,25 @@ function keySequence(event, terminal = null) {
   return null;
 }
 
-function terminalMouseCell(event) {
-  const viewport = $("#terminalViewport");
-  const metrics = terminalCellMetrics();
+function terminalMouseCell(event, paneId = activePaneId()) {
+  const elements = paneElements(paneId);
+  const viewport = elements.viewport;
+  const metrics = terminalCellMetrics(viewport, elements.text);
   const rect = viewport.getBoundingClientRect();
   const x = Math.floor((event.clientX - rect.left - metrics.paddingLeft) / metrics.charWidth) + 1;
   const y = Math.floor((event.clientY - rect.top - metrics.paddingTop) / metrics.lineHeight) + 1;
   const session = activeSession();
-  const terminal = session ? terminalFor(session.id) : null;
+  const terminal = session ? terminalFor(session.id, paneId) : null;
   return {
     x: Math.max(1, Math.min(terminal ? terminal.cols : 999, x)),
     y: Math.max(1, Math.min(terminal ? terminal.rows : 999, y))
   };
 }
 
-function terminalMouseSequence(event, kind) {
+function terminalMouseSequence(event, kind, paneId = activePaneId()) {
   const session = activeSession();
   if (!session || session.state !== "connected" || event.shiftKey) return null;
-  const terminal = terminalFor(session.id);
+  const terminal = terminalFor(session.id, paneId);
   if (!terminal.mouseTracking) return null;
 
   if (kind === "move") {
@@ -3182,7 +3348,7 @@ function terminalMouseSequence(event, kind) {
 
   if (event.altKey) button += 8;
   if (event.ctrlKey) button += 16;
-  const cell = terminalMouseCell(event);
+  const cell = terminalMouseCell(event, paneId);
 
   if (terminal.sgrMouse) {
     const suffix = kind === "up" ? "m" : "M";
@@ -3192,6 +3358,175 @@ function terminalMouseSequence(event, kind) {
   const legacyX = Math.max(32, Math.min(255, cell.x + 32));
   const legacyY = Math.max(32, Math.min(255, cell.y + 32));
   return "\u001b[M" + String.fromCharCode(legacyButton, legacyX, legacyY);
+}
+
+function writeTerminalPaneData(sessionId, paneId, data, quiet = false) {
+  return paneId ? writePaneData(sessionId, paneId, data, quiet) : writeSessionData(sessionId, data, quiet);
+}
+
+function bindSplitTerminalEvents() {
+  const viewport = $("#splitTerminalViewport");
+  const imeInput = $("#splitTerminalImeInput");
+  if (!viewport || !imeInput) return;
+
+  let imeComposing = false;
+  let imeSuppressInput = false;
+  const paneId = () => $("#splitTerminalPane").dataset.paneId || "";
+  const activate = () => {
+    const id = paneId();
+    if (id) setActivePane(id);
+    return id;
+  };
+
+  imeInput.addEventListener("compositionstart", () => {
+    imeComposing = true;
+    imeSuppressInput = false;
+  });
+  imeInput.addEventListener("compositionend", async (event) => {
+    imeComposing = false;
+    const id = activate();
+    const text = imeInput.value || event.data || "";
+    imeInput.value = "";
+    if (!id || !text) return;
+    imeSuppressInput = true;
+    await sendTerminalData(text, id);
+    window.setTimeout(() => { imeSuppressInput = false; }, 0);
+  });
+  imeInput.addEventListener("input", async (event) => {
+    if (imeComposing || event.isComposing) return;
+    if (imeSuppressInput) {
+      imeInput.value = "";
+      return;
+    }
+    const id = activate();
+    const text = imeInput.value;
+    imeInput.value = "";
+    if (id && text) await sendTerminalData(text, id);
+  });
+
+  viewport.addEventListener("click", () => {
+    const selection = window.getSelection();
+    if (selection && selection.toString()) return;
+    const id = activate();
+    if (id) focusTerminalInput(id);
+  });
+
+  viewport.addEventListener("keydown", async (event) => {
+    if (event.isComposing || event.key === "Process" || event.keyCode === 229) return;
+    const id = activate();
+    if (!id) return;
+    if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "\\") {
+      event.preventDefault();
+      setActivePane("");
+      return;
+    }
+    const key = event.key.toLowerCase();
+    const session = activeSession();
+    const terminal = session ? terminalFor(session.id, id) : null;
+    const applicationMode = !!(terminal && terminal.alternateScreen);
+
+    if (applicationMode) {
+      if (event.ctrlKey && event.shiftKey && key === "c") {
+        event.preventDefault();
+        await copyTerminalSelection(terminalSelectionText(id));
+        return;
+      }
+      if ((event.ctrlKey && event.shiftKey && key === "v") || (event.shiftKey && event.key === "Insert")) {
+        event.preventDefault();
+        await pasteTerminalClipboard(id);
+        return;
+      }
+      const sequence = keySequence(event, terminal);
+      if (sequence !== null) {
+        event.preventDefault();
+        await sendTerminalData(sequence, id);
+      }
+      return;
+    }
+
+    if (event.ctrlKey && !event.altKey && key === "c") {
+      const selectedText = terminalSelectionText(id);
+      event.preventDefault();
+      if (selectedText) await copyTerminalSelection(selectedText);
+      else await sendTerminalData("\u0003", id);
+      return;
+    }
+    if ((event.ctrlKey && !event.altKey && key === "v") || (event.shiftKey && event.key === "Insert")) {
+      event.preventDefault();
+      await pasteTerminalClipboard(id);
+      return;
+    }
+    if (event.ctrlKey && event.key === "Insert") {
+      event.preventDefault();
+      await copyTerminalSelection(terminalSelectionText(id));
+      return;
+    }
+    if (event.ctrlKey && event.shiftKey && key === "a") {
+      event.preventDefault();
+      selectAllTerminalText(id);
+      return;
+    }
+    if (event.key === "Enter") captureRenderedCommand(session, terminal, id);
+
+    const sequence = keySequence(event, terminal);
+    if (sequence !== null) {
+      event.preventDefault();
+      await sendTerminalData(sequence, id);
+    }
+  });
+
+  viewport.addEventListener("focusin", () => {
+    const id = activate();
+    const session = activeSession();
+    if (!id || !session) return;
+    const terminal = terminalFor(session.id, id);
+    renderTerminal();
+    if (session.state === "connected" && terminal.focusReporting) {
+      writePaneData(session.id, id, "\u001b[I", true);
+    }
+  });
+  viewport.addEventListener("focusout", (event) => {
+    if (event.relatedTarget && viewport.contains(event.relatedTarget)) return;
+    const id = paneId();
+    const session = activeSession();
+    if (!id || !session) return;
+    const terminal = terminalFor(session.id, id);
+    renderTerminal();
+    if (session.state === "connected" && terminal.focusReporting) {
+      writePaneData(session.id, id, "\u001b[O", true);
+    }
+  });
+
+  for (const kind of ["down", "up", "move"]) {
+    viewport.addEventListener("pointer" + kind, (event) => {
+      const id = kind === "down" ? activate() : paneId();
+      if (!id) return;
+      const sequence = terminalMouseSequence(event, kind, id);
+      if (!sequence) return;
+      event.preventDefault();
+      if (kind === "down") focusTerminalInput(id);
+      const session = activeSession();
+      if (session) writePaneData(session.id, id, sequence, true);
+    });
+  }
+  viewport.addEventListener("wheel", (event) => {
+    const id = paneId();
+    if (!id) return;
+    const sequence = terminalMouseSequence(event, "wheel", id);
+    if (!sequence) return;
+    event.preventDefault();
+    const session = activeSession();
+    if (session) writePaneData(session.id, id, sequence, true);
+  }, { passive: false });
+  viewport.addEventListener("contextmenu", (event) => {
+    if (event.shiftKey) return;
+    event.preventDefault();
+    const id = activate();
+    if (id) showTerminalContextMenu(event, id);
+  });
+
+  const resizeObserver = new ResizeObserver(() => scheduleActiveTerminalResize());
+  resizeObserver.observe(viewport);
 }
 
 function bindEvents() {
@@ -3206,15 +3541,32 @@ function bindEvents() {
     showToast(payload && payload.message ? payload.message : "密码未能保存到安全存储");
   });
   EventsOn("ssh:output", (payload) => {
-    const terminal = terminalFor(payload.session_id);
-    const responses = terminal.feed(decodeOutput(payload.data_base64, payload.session_id));
-    for (const response of responses) writeSessionData(payload.session_id, response, true);
-    observeRemotePrompt(payload.session_id, terminal);
+    const paneId = payload.pane_id || "";
+    if (paneId) {
+      const split = splitPaneForSession(payload.session_id);
+      const isCurrentPane = !!split && split.id === paneId;
+      if (!isCurrentPane && !state.pendingSplitSessions.has(payload.session_id)) return;
+    }
+    const terminal = terminalFor(payload.session_id, paneId);
+    const responses = terminal.feed(decodeOutput(payload.data_base64, payload.session_id, paneId));
+    for (const response of responses) writeTerminalPaneData(payload.session_id, paneId, response, true);
+    observeRemotePrompt(payload.session_id, terminal, paneId);
     if (payload.session_id === state.activeSessionId) renderTerminal();
   });
+  EventsOn("ssh:pane-closed", (payload) => removeSplitPaneState(payload.session_id, payload.pane_id));
   EventsOn("ssh:host-key", (challenge) => showHostKeyChallenge(challenge));
   EventsOn("ssh:session-closed", (payload) => {
     state.sessions = state.sessions.filter((session) => session.id !== payload.session_id);
+    const split = splitPaneForSession(payload.session_id);
+    if (split) {
+      const splitKey = terminalRuntimeKey(payload.session_id, split.id);
+      state.terminals.delete(splitKey);
+      state.decoders.delete(splitKey);
+      state.promptPrefixes.delete(splitKey);
+    }
+    state.splitPanes.delete(payload.session_id);
+    state.activePaneBySession.delete(payload.session_id);
+    state.pendingSplitSessions.delete(payload.session_id);
     state.terminals.delete(payload.session_id);
     state.decoders.delete(payload.session_id);
     state.promptPrefixes.delete(payload.session_id);
@@ -3377,6 +3729,9 @@ function bindEvents() {
     try { await RetrySession(session.id); } catch (error) { showToast(String(error)); }
   });
 
+  $("#splitSessionButton").addEventListener("click", openSplitPane);
+  $("#closeSplitPaneButton").addEventListener("click", closeSplitPane);
+
   $("#closeSessionButton").addEventListener("click", () => {
     const session = activeSession();
     if (session) closeSession(session.id);
@@ -3411,7 +3766,7 @@ function bindEvents() {
     imeInput.value = "";
     if (!text) return;
     terminalImeSuppressInput = true;
-    await sendTerminalData(text);
+    await sendTerminalData(text, "");
     window.setTimeout(() => { terminalImeSuppressInput = false; }, 0);
   });
   imeInput.addEventListener("input", async (event) => {
@@ -3422,9 +3777,10 @@ function bindEvents() {
     }
     const text = imeInput.value;
     imeInput.value = "";
-    if (text) await sendTerminalData(text);
+    if (text) await sendTerminalData(text, "");
   });
   viewport.addEventListener("click", () => {
+    setActivePane("");
     const selection = window.getSelection();
     if (selection && selection.toString()) return;
     focusTerminalInput();
@@ -3432,6 +3788,15 @@ function bindEvents() {
 
   viewport.addEventListener("keydown", async (event) => {
     if (event.isComposing || event.key === "Process" || event.keyCode === 229) return;
+    setActivePane("");
+    if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "\\") {
+      event.preventDefault();
+      const session = activeSession();
+      const split = session ? splitPaneForSession(session.id) : null;
+      if (split) setActivePane(split.id);
+      else await openSplitPane();
+      return;
+    }
     const key = event.key.toLowerCase();
     const session = activeSession();
     const terminal = session ? terminalFor(session.id) : null;
@@ -3504,6 +3869,7 @@ function bindEvents() {
   });
 
   viewport.addEventListener("focusin", () => {
+    setActivePane("");
     if (terminalFocusInside) return;
     terminalFocusInside = true;
     const session = activeSession();
@@ -3528,7 +3894,8 @@ function bindEvents() {
   });
 
   viewport.addEventListener("pointerdown", (event) => {
-    const sequence = terminalMouseSequence(event, "down");
+    setActivePane("");
+    const sequence = terminalMouseSequence(event, "down", "");
     if (!sequence) return;
     event.preventDefault();
     focusTerminalInput();
@@ -3536,21 +3903,21 @@ function bindEvents() {
   });
 
   viewport.addEventListener("pointerup", (event) => {
-    const sequence = terminalMouseSequence(event, "up");
+    const sequence = terminalMouseSequence(event, "up", "");
     if (!sequence) return;
     event.preventDefault();
     writeSessionData(activeSession().id, sequence, true);
   });
 
   viewport.addEventListener("pointermove", (event) => {
-    const sequence = terminalMouseSequence(event, "move");
+    const sequence = terminalMouseSequence(event, "move", "");
     if (!sequence) return;
     event.preventDefault();
     writeSessionData(activeSession().id, sequence, true);
   });
 
   viewport.addEventListener("wheel", (event) => {
-    const sequence = terminalMouseSequence(event, "wheel");
+    const sequence = terminalMouseSequence(event, "wheel", "");
     if (!sequence) return;
     event.preventDefault();
     writeSessionData(activeSession().id, sequence, true);
@@ -3559,7 +3926,8 @@ function bindEvents() {
   viewport.addEventListener("contextmenu", (event) => {
     if (event.shiftKey) return;
     event.preventDefault();
-    showTerminalContextMenu(event);
+    setActivePane("");
+    showTerminalContextMenu(event, "");
   });
 
   $("#terminalContextMenu").querySelectorAll("[data-terminal-action]").forEach((button) => {
@@ -3580,10 +3948,21 @@ function bindEvents() {
 
   const resizeObserver = new ResizeObserver(() => scheduleActiveTerminalResize());
   resizeObserver.observe(viewport);
+  bindSplitTerminalEvents();
 
   window.addEventListener("keydown", (event) => {
-    const terminalFocused = viewport.contains(document.activeElement);
+    const splitViewport = $("#splitTerminalViewport");
+    const terminalFocused = viewport.contains(document.activeElement) || (splitViewport && splitViewport.contains(document.activeElement));
     if (terminalFocused) return;
+
+    if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "\\") {
+      event.preventDefault();
+      const session = activeSession();
+      const split = session ? splitPaneForSession(session.id) : null;
+      if (split) setActivePane(split.id);
+      else openSplitPane();
+      return;
+    }
 
     if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "k") {
       event.preventDefault();

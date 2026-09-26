@@ -170,8 +170,10 @@
 - 支持常见 DSR / DA / DECID / DECRQM 与 OSC 10/11/12 query response；OSC 缓冲有长度上限。
 - copy / paste 正常。
 - Ctrl+L 只清显示，不代表服务器执行清理。
-- Split pane 独立 Shell。
-- 第一阶段只左右二分。
+- Split pane 独立 Shell：同一标签复用 SSH transport，但第二 Pane 必须创建独立 Shell Channel / PTY，不能只是同一输出的两个视图。
+- 第一阶段只左右二分，每个 Session 最多 2 个 Pane；工具栏“左右分屏”和 `Alt+\\` 均可进入/切换分屏。
+- 两个 Pane 分别处理输入、中文 IME、ANSI 状态、scrollback、鼠标协议和 PTY resize；关闭第二 Pane 不得断开主 Session。
+- 主 Session 断开或重连时，附属 Pane 必须关闭并清理本地终端缓冲，不残留幽灵 Pane。
 
 ## 13. Session Tabs
 

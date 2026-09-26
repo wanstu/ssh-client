@@ -26,6 +26,12 @@ type pendingChallenge struct {
 	response  chan string
 }
 
+type managedPane struct {
+	id    string
+	shell *ssh.Session
+	stdin io.WriteCloser
+}
+
 type managedSession struct {
 	mu            sync.Mutex
 	snapshot      SessionSnapshot
@@ -35,6 +41,7 @@ type managedSession struct {
 	client        *ssh.Client
 	shell         *ssh.Session
 	stdin         io.WriteCloser
+	panes         map[string]*managedPane
 	retryNow      chan struct{}
 	stopReconnect bool
 }
@@ -76,7 +83,7 @@ func (m *Manager) Connect(cfg ConnectConfig) (SessionSnapshot, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	now := time.Now()
 	ms := &managedSession{
-		cfg: cfg, ctx: ctx, cancel: cancel, retryNow: make(chan struct{}, 1),
+		cfg: cfg, ctx: ctx, cancel: cancel, panes: map[string]*managedPane{}, retryNow: make(chan struct{}, 1),
 		snapshot: SessionSnapshot{
 			ID: runtimeID("session"), ProfileID: cfg.ProfileID, Name: cfg.Name,
 			Target: net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port)),
@@ -159,6 +166,140 @@ func (m *Manager) Resize(sessionID string, cols, rows int) error {
 	return shell.WindowChange(rows, cols)
 }
 
+func (m *Manager) OpenPane(sessionID string, cols, rows int) (TerminalPaneSnapshot, error) {
+	if cols < 1 || rows < 1 {
+		return TerminalPaneSnapshot{}, errors.New("terminal size must be positive")
+	}
+	ms, err := m.session(sessionID)
+	if err != nil {
+		return TerminalPaneSnapshot{}, err
+	}
+
+	ms.mu.Lock()
+	if ms.snapshot.State != "connected" || ms.client == nil {
+		ms.mu.Unlock()
+		return TerminalPaneSnapshot{}, errors.New("session is not connected")
+	}
+	if len(ms.panes) >= 1 {
+		ms.mu.Unlock()
+		return TerminalPaneSnapshot{}, errors.New("only one split pane is supported")
+	}
+	client := ms.client
+	term := ms.cfg.Terminal.Term
+	if term == "" {
+		term = "xterm-256color"
+	}
+	ms.mu.Unlock()
+
+	shell, err := client.NewSession()
+	if err != nil {
+		return TerminalPaneSnapshot{}, fmt.Errorf("open split shell: %w", err)
+	}
+	closeShell := true
+	defer func() {
+		if closeShell {
+			_ = shell.Close()
+		}
+	}()
+
+	modes := ssh.TerminalModes{ssh.ECHO: 1, ssh.TTY_OP_ISPEED: 14400, ssh.TTY_OP_OSPEED: 14400}
+	if err := shell.RequestPty(term, rows, cols, modes); err != nil {
+		return TerminalPaneSnapshot{}, fmt.Errorf("request split pty: %w", err)
+	}
+	stdin, err := shell.StdinPipe()
+	if err != nil {
+		return TerminalPaneSnapshot{}, fmt.Errorf("open split stdin: %w", err)
+	}
+	stdout, err := shell.StdoutPipe()
+	if err != nil {
+		return TerminalPaneSnapshot{}, fmt.Errorf("open split stdout: %w", err)
+	}
+	stderr, err := shell.StderrPipe()
+	if err != nil {
+		return TerminalPaneSnapshot{}, fmt.Errorf("open split stderr: %w", err)
+	}
+	if err := shell.Shell(); err != nil {
+		return TerminalPaneSnapshot{}, fmt.Errorf("start split shell: %w", err)
+	}
+
+	paneID := runtimeID("pane")
+	pane := &managedPane{id: paneID, shell: shell, stdin: stdin}
+	ms.mu.Lock()
+	if ms.client != client || ms.snapshot.State != "connected" {
+		ms.mu.Unlock()
+		return TerminalPaneSnapshot{}, errors.New("session disconnected while opening split pane")
+	}
+	if len(ms.panes) >= 1 {
+		ms.mu.Unlock()
+		return TerminalPaneSnapshot{}, errors.New("only one split pane is supported")
+	}
+	ms.panes[paneID] = pane
+	ms.mu.Unlock()
+	closeShell = false
+
+	go m.pumpPaneOutput(sessionID, paneID, stdout)
+	go m.pumpPaneOutput(sessionID, paneID, stderr)
+	go m.waitPane(ms, paneID, shell)
+
+	return TerminalPaneSnapshot{ID: paneID, SessionID: sessionID, Title: "shell · 2"}, nil
+}
+
+func (m *Manager) WritePane(sessionID, paneID, data string) error {
+	ms, err := m.session(sessionID)
+	if err != nil {
+		return err
+	}
+	ms.mu.Lock()
+	pane := ms.panes[paneID]
+	encodingName := ms.cfg.Terminal.Encoding
+	ms.mu.Unlock()
+	if pane == nil || pane.stdin == nil {
+		return fmt.Errorf("pane %q not found", paneID)
+	}
+	payload, err := encodeTerminalInput(data, encodingName)
+	if err != nil {
+		return err
+	}
+	_, err = pane.stdin.Write(payload)
+	return err
+}
+
+func (m *Manager) ResizePane(sessionID, paneID string, cols, rows int) error {
+	if cols < 1 || rows < 1 {
+		return errors.New("terminal size must be positive")
+	}
+	ms, err := m.session(sessionID)
+	if err != nil {
+		return err
+	}
+	ms.mu.Lock()
+	pane := ms.panes[paneID]
+	ms.mu.Unlock()
+	if pane == nil || pane.shell == nil {
+		return fmt.Errorf("pane %q not found", paneID)
+	}
+	return pane.shell.WindowChange(rows, cols)
+}
+
+func (m *Manager) ClosePane(sessionID, paneID string) error {
+	ms, err := m.session(sessionID)
+	if err != nil {
+		return err
+	}
+	ms.mu.Lock()
+	pane := ms.panes[paneID]
+	if pane != nil {
+		delete(ms.panes, paneID)
+	}
+	ms.mu.Unlock()
+	if pane == nil {
+		return nil
+	}
+	_ = pane.shell.Close()
+	m.emitEvent(EventPaneClosed, PaneEvent{SessionID: sessionID, PaneID: paneID})
+	return nil
+}
+
 func (m *Manager) RetryNow(sessionID string) error {
 	ms, err := m.session(sessionID)
 	if err != nil {
@@ -184,6 +325,7 @@ func (m *Manager) Disconnect(sessionID string) error {
 	if cancel != nil {
 		cancel()
 	}
+	m.closeAllPanes(ms)
 	if shell != nil {
 		_ = shell.Close()
 	}
@@ -324,7 +466,13 @@ func (m *Manager) runOnce(ms *managedSession) (bool, error) {
 	ms.mu.Lock()
 	ms.client = client
 	ms.mu.Unlock()
-	defer func() { _ = client.Close(); ms.mu.Lock(); ms.client = nil; ms.mu.Unlock() }()
+	defer func() {
+		m.closeAllPanes(ms)
+		_ = client.Close()
+		ms.mu.Lock()
+		ms.client = nil
+		ms.mu.Unlock()
+	}()
 
 	m.setState(ms, "connecting", "open_session", "正在创建远端会话", "", "")
 	shell, err := client.NewSession()
@@ -428,6 +576,55 @@ func (m *Manager) verifyHostKey(ms *managedSession, address string, key ssh.Publ
 		}
 		m.setState(ms, "authenticating", "authenticate", "正在验证用户身份", "", "")
 		return nil
+	}
+}
+
+func (m *Manager) pumpPaneOutput(sessionID, paneID string, reader io.Reader) {
+	buf := make([]byte, 16*1024)
+	for {
+		n, err := reader.Read(buf)
+		if n > 0 {
+			m.emitEvent(EventOutput, OutputEvent{SessionID: sessionID, PaneID: paneID, DataBase64: base64.StdEncoding.EncodeToString(buf[:n])})
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (m *Manager) waitPane(ms *managedSession, paneID string, shell *ssh.Session) {
+	_ = shell.Wait()
+	ms.mu.Lock()
+	pane := ms.panes[paneID]
+	if pane == nil || pane.shell != shell {
+		ms.mu.Unlock()
+		return
+	}
+	delete(ms.panes, paneID)
+	sessionID := ms.snapshot.ID
+	ms.mu.Unlock()
+	m.emitEvent(EventPaneClosed, PaneEvent{SessionID: sessionID, PaneID: paneID})
+}
+
+func (m *Manager) closeAllPanes(ms *managedSession) {
+	ms.mu.Lock()
+	if len(ms.panes) == 0 {
+		ms.mu.Unlock()
+		return
+	}
+	panes := make([]*managedPane, 0, len(ms.panes))
+	sessionID := ms.snapshot.ID
+	for _, pane := range ms.panes {
+		panes = append(panes, pane)
+	}
+	ms.panes = map[string]*managedPane{}
+	ms.mu.Unlock()
+
+	for _, pane := range panes {
+		if pane.shell != nil {
+			_ = pane.shell.Close()
+		}
+		m.emitEvent(EventPaneClosed, PaneEvent{SessionID: sessionID, PaneID: pane.id})
 	}
 }
 

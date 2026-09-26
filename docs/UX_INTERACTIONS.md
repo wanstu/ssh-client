@@ -128,9 +128,9 @@
 
 第一阶段只提供左右二分。
 
-同一标签内多个 Pane 默认共享同一 Connection Profile，但分别创建 Shell Channel。
+同一标签内多个 Pane 默认共享同一 Connection Profile 和 SSH transport，但分别创建 Shell Channel / PTY。工具栏提供“左右分屏”，快捷键 `Alt+\\` 在两个 Pane 之间切换；第二 Pane 标题栏可单独关闭。
 
-不先做任意网格拆分。
+不先做任意网格拆分，也不持久化运行时 Pane；应用重启后仍从单 Pane 开始。
 
 ## 9. 快速连接
 

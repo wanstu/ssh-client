@@ -178,7 +178,7 @@ TerminalPane
   title?
 ```
 
-同一标签拆分终端时，Pane 独立 Shell Channel，共享 Session transport / profile 的具体实现方式由技术方案决定。
+同一标签拆分终端时，Pane 独立 Shell Channel。当前实现复用 Session 的 `ssh.Client` transport，并通过 `NewSession()` 创建第二个 Shell/PTY；关闭附属 Pane 只关闭该 channel，不关闭主 transport。第一阶段每个 Session 最多 2 个 Pane。
 
 ## 11. Import Source
 

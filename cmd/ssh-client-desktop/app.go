@@ -658,6 +658,18 @@ func (a *App) WriteSession(id, data string) error { return a.sessions.Write(id, 
 func (a *App) ResizeSession(id string, cols, rows int) error {
 	return a.sessions.Resize(id, cols, rows)
 }
+func (a *App) OpenPane(id string, cols, rows int) (sshclient.TerminalPaneSnapshot, error) {
+	return a.sessions.OpenPane(id, cols, rows)
+}
+func (a *App) WritePane(sessionID, paneID, data string) error {
+	return a.sessions.WritePane(sessionID, paneID, data)
+}
+func (a *App) ResizePane(sessionID, paneID string, cols, rows int) error {
+	return a.sessions.ResizePane(sessionID, paneID, cols, rows)
+}
+func (a *App) ClosePane(sessionID, paneID string) error {
+	return a.sessions.ClosePane(sessionID, paneID)
+}
 func (a *App) RetrySession(id string) error           { return a.sessions.RetryNow(id) }
 func (a *App) DisconnectSession(id string) error      { return a.sessions.Disconnect(id) }
 func (a *App) CloseSession(id string) error           { return a.sessions.CloseSession(id) }

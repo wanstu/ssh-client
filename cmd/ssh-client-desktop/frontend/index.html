@@ -85,15 +85,31 @@
           </div>
           <div class="session-actions">
             <button id="retrySessionButton" class="dk-button dk-button-secondary compact-button is-hidden" type="button">立即重试</button>
+            <button id="splitSessionButton" class="dk-button dk-button-secondary compact-button" type="button" title="左右拆分终端（Alt+\\）">左右分屏</button>
             <button id="disconnectSessionButton" class="dk-button dk-button-secondary compact-button" type="button">断开</button>
             <button id="closeSessionButton" class="dk-button dk-button-ghost compact-button" type="button">关闭标签</button>
           </div>
         </div>
         <div id="sessionBanner" class="session-banner is-hidden"></div>
-        <div id="terminalViewport" class="terminal-viewport" tabindex="0" aria-label="SSH 终端">
-          <pre id="terminalText" class="terminal-text"></pre>
-          <div id="terminalCursor" class="terminal-cursor" aria-hidden="true"></div>
-          <textarea id="terminalImeInput" class="terminal-ime-input" tabindex="-1" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="终端输入"></textarea>
+        <div id="terminalPanes" class="terminal-panes">
+          <section id="primaryTerminalPane" class="terminal-pane is-active" data-pane-id="">
+            <header class="terminal-pane-header"><span>shell · 1</span></header>
+            <div id="terminalViewport" class="terminal-viewport" tabindex="0" aria-label="SSH 终端 shell 1">
+              <pre id="terminalText" class="terminal-text"></pre>
+              <div id="terminalCursor" class="terminal-cursor" aria-hidden="true"></div>
+              <textarea id="terminalImeInput" class="terminal-ime-input" tabindex="-1" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="终端输入 shell 1"></textarea>
+            </div>
+          </section>
+          <section id="splitTerminalPane" class="terminal-pane is-hidden" data-pane-id="">
+            <header class="terminal-pane-header">
+              <span>shell · 2</span>
+              <button id="closeSplitPaneButton" class="terminal-pane-close" type="button" title="关闭分屏" aria-label="关闭第二个 Shell">×</button>
+            </header>
+            <div id="splitTerminalViewport" class="terminal-viewport" tabindex="0" aria-label="SSH 终端 shell 2">
+              <pre id="splitTerminalText" class="terminal-text"></pre>
+              <textarea id="splitTerminalImeInput" class="terminal-ime-input" tabindex="-1" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="终端输入 shell 2"></textarea>
+            </div>
+          </section>
         </div>
         <footer class="terminal-statusbar">
           <span id="terminalStateText">SSH</span>
