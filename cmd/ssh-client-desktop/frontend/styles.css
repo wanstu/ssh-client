@@ -1074,6 +1074,75 @@ button, input, select {
   width: min(560px, 92vw);
 }
 
+.about-dialog {
+  width: min(480px, 92vw);
+}
+
+.about-product {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--dk-border) 68%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--dk-bg-subtle) 74%, var(--dk-bg-elevated));
+}
+
+.about-product-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 11px;
+  background: var(--dk-primary);
+  color: var(--dk-on-primary, #fff);
+  font: 700 15px/1 "Cascadia Mono", Consolas, monospace;
+}
+
+.about-product strong,
+.about-product span {
+  display: block;
+}
+
+.about-product strong {
+  color: var(--dk-text);
+  font-size: 15px;
+}
+
+.about-product span {
+  margin-top: 4px;
+  color: var(--dk-text-secondary);
+  font: 12px/1.4 "Cascadia Mono", Consolas, monospace;
+}
+
+.about-details {
+  display: grid;
+  gap: 8px;
+}
+
+.about-details > div {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--dk-border) 55%, transparent);
+  border-radius: 9px;
+}
+
+.about-details span {
+  color: var(--dk-text-secondary);
+  font-size: 11px;
+}
+
+.about-details code {
+  overflow: hidden;
+  color: var(--dk-text);
+  font: 11px/1.4 "Cascadia Mono", Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .command-dialog {
   width: min(700px, 92vw);
   padding: 0;

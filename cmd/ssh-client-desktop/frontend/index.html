@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="/desktopkit/components.css">
   <link rel="stylesheet" href="/desktopkit/navigation.css">
   <link rel="stylesheet" href="styles.css">
+  <script src="/desktopkit/about.js" data-desktopkit-about></script>
   <script src="/desktopkit/theme.js"></script>
 </head>
 <body>
@@ -23,6 +24,7 @@
     </div>
     <div class="rail-bottom">
       <button id="quickConnectButton" class="rail-button" title="快速连接">⚡</button>
+      <button id="aboutButton" class="rail-button" title="关于">ⓘ</button>
       <button id="settingsButton" class="rail-button" title="设置">⚙</button>
     </div>
   </nav>
@@ -362,10 +364,33 @@
       <span><strong>开机启动</strong><small>由 Wails Desktop Kit 的 autostart 管理。</small></span>
       <input id="launchAtLogin" class="dk-switch" type="checkbox">
     </label>
-    <dk-about app-name="SSH Client"></dk-about>
     <div class="dialog-actions">
       <button class="dk-button dk-button-secondary" value="cancel" type="submit">关闭</button>
       <button id="saveSettingsButton" class="dk-button dk-button-primary" type="button">保存设置</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="aboutDialog" class="dk-dialog compact-dialog about-dialog">
+  <form class="dk-stack" method="dialog">
+    <div class="dialog-heading">
+      <div><h2>关于 SSH Client</h2><p>应用版本与构建信息</p></div>
+      <button class="dk-button dk-button-ghost compact-button" value="cancel" type="submit" aria-label="关闭">×</button>
+    </div>
+    <div class="about-product">
+      <div class="about-product-icon">&gt;_</div>
+      <div>
+        <strong>SSH Client</strong>
+        <span id="aboutVersion">读取版本中…</span>
+      </div>
+    </div>
+    <div class="about-details">
+      <div><span>版本</span><code id="aboutVersionDetail">读取中…</code></div>
+      <div><span>Commit</span><code id="aboutCommit">读取中…</code></div>
+      <div><span>Windows 文件版本</span><code id="aboutProductVersion">读取中…</code></div>
+    </div>
+    <div class="dialog-actions">
+      <button class="dk-button dk-button-primary" value="cancel" type="submit">关闭</button>
     </div>
   </form>
 </dialog>

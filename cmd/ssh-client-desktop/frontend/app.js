@@ -1406,6 +1406,15 @@ function buildCommandItems() {
     },
     {
       kind: "操作",
+      icon: "ⓘ",
+      label: "关于 SSH Client",
+      detail: "查看版本与构建信息",
+      meta: "",
+      keywords: "about version build commit 关于 版本",
+      action: () => openAbout()
+    },
+    {
+      kind: "操作",
       icon: "⚙",
       label: "打开设置",
       detail: "主题、开机启动等桌面设置",
@@ -2891,6 +2900,34 @@ function updateThemePackDescription() {
   $("#themePackDescription").title = state.themeCatalog.last_error || "";
 }
 
+async function loadAboutInfo() {
+  let info = null;
+  try {
+    if (window.DesktopKit && window.DesktopKit.buildInfo && typeof window.DesktopKit.buildInfo.load === "function") {
+      info = await window.DesktopKit.buildInfo.load();
+    } else {
+      const response = await fetch("/desktopkit-build-info.json", { cache: "no-store" });
+      if (response.ok) info = await response.json();
+    }
+  } catch (_) {
+    info = null;
+  }
+
+  const version = String(info && info.version || "dev");
+  const productVersion = String(info && info.product_version || "0.0.0");
+  const commit = String(info && info.commit || "");
+  $("#aboutVersion").textContent = version;
+  $("#aboutVersionDetail").textContent = version;
+  $("#aboutProductVersion").textContent = productVersion;
+  $("#aboutCommit").textContent = commit ? commit.slice(0, 12) : "未注入";
+}
+
+function openAbout() {
+  const dialog = $("#aboutDialog");
+  loadAboutInfo();
+  if (!dialog.open) dialog.showModal();
+}
+
 function openSettings() {
   const theme = state.settings.theme || { mode: "dark", variant: "aurora" };
   $("#themeMode").value = theme.mode || "dark";
@@ -3192,6 +3229,7 @@ function bindEvents() {
   $("#welcomeNewButton").addEventListener("click", () => openProfileDialog());
   $("#quickConnectButton").addEventListener("click", openQuickDialog);
   $("#welcomeQuickButton").addEventListener("click", openQuickDialog);
+  $("#aboutButton").addEventListener("click", openAbout);
   $("#settingsButton").addEventListener("click", openSettings);
   $("#refreshButton").addEventListener("click", () => loadState().catch((error) => showToast(String(error))));
   $("#commandButton").addEventListener("click", openCommandPalette);
