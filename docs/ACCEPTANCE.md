@@ -181,7 +181,11 @@
 - 切换不丢终端内容。
 - 活动 Session 关闭默认确认。
 - Disconnected 历史标签可直接关闭。
-- Restore recently closed 恢复 UI 历史，不恢复已死亡的远端 SSH transport。
+- 关闭真实 Session 后进入“最近关闭”；关闭 `history_only` 标签不得再次写入最近关闭，避免循环历史。
+- `Ctrl+Shift+T` 与会话侧栏均恢复最新记录，并在触发后消费该记录，不能重复恢复同一条。
+- 原 Profile 仍存在时，恢复操作使用当前 Profile 配置重新建立新的 SSH Session；绝不尝试复活已死亡的旧 transport。
+- 原 Profile 已删除或原会话没有 `profile_id` 时，恢复为只读 `history_only` 标签。
+- 跨应用重启只持久化最近关闭的会话元数据，不持久化终端正文；同一次运行内可使用内存中的截断终端文本展示历史。
 
 ## 14. Security Logging
 

@@ -1161,6 +1161,41 @@ function restoreHistorySession(record) {
   window.setTimeout(() => focusTerminalInput(), 0);
 }
 
+function consumeClosedSessionRecord(record) {
+  if (!record) return;
+  state.history = state.history.filter((item) => item.history_id !== record.history_id);
+  persistSessionHistory();
+  if (state.nav === "sessions") renderSidebar();
+}
+
+async function reopenClosedSession(record) {
+  if (!record) return;
+  const profile = record.profile_id ? profileById(record.profile_id) : null;
+  consumeClosedSessionRecord(record);
+  if (profile) {
+    try {
+      await beginProfileConnection(profile);
+    } catch (error) {
+      state.history.unshift(record);
+      state.history = state.history.slice(0, SESSION_HISTORY_LIMIT);
+      persistSessionHistory();
+      if (state.nav === "sessions") renderSidebar();
+      showToast("恢复会话失败：" + error);
+    }
+    return;
+  }
+  restoreHistorySession(record);
+}
+
+async function restoreLastClosedSession() {
+  const record = state.history[0];
+  if (!record) {
+    showToast("没有最近关闭的会话");
+    return;
+  }
+  await reopenClosedSession(record);
+}
+
 const SIDEBAR_DEFAULT_WIDTH = 310;
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 600;
@@ -1486,6 +1521,19 @@ function buildCommandItems() {
       meta: "",
       keywords: "duplicate copy clone 复制 连接 副本",
       action: () => duplicateConnectionProfile(selectedProfile)
+    });
+  }
+
+  if (state.history.length) {
+    const recentClosed = state.history[0];
+    items.push({
+      kind: "操作",
+      icon: "↶",
+      label: "恢复最近关闭会话",
+      detail: recentClosed.name + (recentClosed.target ? " · " + recentClosed.target : ""),
+      meta: "Ctrl Shift T",
+      keywords: "restore reopen closed session 恢复 最近关闭 会话",
+      action: () => restoreLastClosedSession()
     });
   }
 
@@ -1868,48 +1916,97 @@ function createConnectionRow(profile) {
 }
 
 function renderSessionSidebar(list) {
-  if (!state.sessions.length) {
+  if (!state.sessions.length && !state.history.length) {
     const empty = document.createElement("div");
     empty.className = "dk-empty-state";
     empty.innerHTML = "<div><strong>没有会话</strong><p>连接主机后，会话会保留在这里。</p></div>";
     list.append(empty);
     return;
   }
-  const section = document.createElement("section");
-  section.className = "connection-group";
-  const header = document.createElement("div");
-  header.className = "connection-group-title";
-  header.innerHTML = "<span>当前与最近会话</span><span>" + state.sessions.length + "</span>";
-  section.append(header);
-  for (const session of state.sessions) {
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = "connection-row" + (session.id === state.activeSessionId ? " is-selected" : "");
-    row.title = session.name + "\n" + session.target + "\n" + stateLabel(session.state);
-    const avatar = document.createElement("span");
-    avatar.className = "connection-avatar";
-    avatar.textContent = ">_";
-    const copy = document.createElement("span");
-    copy.className = "connection-content";
-    const name = document.createElement("span");
-    name.className = "connection-name";
-    name.textContent = session.name;
-    const meta = document.createElement("span");
-    meta.className = "connection-meta session-meta";
 
-    const target = document.createElement("span");
-    target.className = "session-target-text";
-    target.textContent = session.target;
+  if (state.sessions.length) {
+    const section = document.createElement("section");
+    section.className = "connection-group";
+    const header = document.createElement("div");
+    header.className = "connection-group-title";
+    header.innerHTML = "<span>当前会话</span><span>" + state.sessions.length + "</span>";
+    section.append(header);
+    for (const session of state.sessions) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "connection-row" + (session.id === state.activeSessionId ? " is-selected" : "");
+      row.title = session.name + "\n" + session.target + "\n" + stateLabel(session.state);
+      const avatar = document.createElement("span");
+      avatar.className = "connection-avatar";
+      avatar.textContent = ">_";
+      const copy = document.createElement("span");
+      copy.className = "connection-content";
+      const name = document.createElement("span");
+      name.className = "connection-name";
+      name.textContent = session.name;
+      const meta = document.createElement("span");
+      meta.className = "connection-meta session-meta";
 
-    meta.append(target);
-    copy.append(name, meta);
-    const dot = document.createElement("span");
-    dot.className = "connection-status " + session.state;
-    row.append(avatar, copy, dot);
-    row.addEventListener("click", () => selectSession(session.id));
-    section.append(row);
+      const target = document.createElement("span");
+      target.className = "session-target-text";
+      target.textContent = session.target;
+
+      meta.append(target);
+      copy.append(name, meta);
+      const dot = document.createElement("span");
+      dot.className = "connection-status " + session.state;
+      row.append(avatar, copy, dot);
+      row.addEventListener("click", () => selectSession(session.id));
+      section.append(row);
+    }
+    list.append(section);
   }
-  list.append(section);
+
+  if (state.history.length) {
+    const recent = document.createElement("section");
+    recent.className = "connection-group recent-session-group";
+    const header = document.createElement("div");
+    header.className = "connection-group-title";
+    const visibleHistory = state.history.slice(0, 8);
+    header.innerHTML = "<span>最近关闭</span><span>" + state.history.length + "</span>";
+    recent.append(header);
+
+    for (const record of visibleHistory) {
+      const profile = record.profile_id ? profileById(record.profile_id) : null;
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "connection-row recent-session-row";
+      row.title = profile ? "重新连接 " + record.name : "打开只读历史 " + record.name;
+
+      const avatar = document.createElement("span");
+      avatar.className = "connection-avatar recent-session-avatar";
+      avatar.textContent = "↶";
+
+      const copy = document.createElement("span");
+      copy.className = "connection-content";
+      const name = document.createElement("span");
+      name.className = "connection-name";
+      name.textContent = record.name;
+      const meta = document.createElement("span");
+      meta.className = "connection-meta session-meta";
+      const target = document.createElement("span");
+      target.className = "session-target-text";
+      target.textContent = record.target || (profile ? profile.host : "历史会话");
+      const time = document.createElement("span");
+      time.className = "recent-session-time";
+      time.textContent = formatHistoryTime(record.closed_at);
+      meta.append(target, time);
+      copy.append(name, meta);
+
+      const action = document.createElement("span");
+      action.className = "history-restore-label";
+      action.textContent = profile ? "重连" : "历史";
+      row.append(avatar, copy, action);
+      row.addEventListener("click", () => reopenClosedSession(record));
+      recent.append(row);
+    }
+    list.append(recent);
+  }
 }
 
 function rememberCommand(command, session = activeSession()) {
@@ -3503,6 +3600,13 @@ function bindSplitTerminalEvents() {
 
   viewport.addEventListener("keydown", async (event) => {
     if (event.isComposing || event.key === "Process" || event.keyCode === 229) return;
+    const key = event.key.toLowerCase();
+    if (event.ctrlKey && event.shiftKey && !event.altKey && key === "t") {
+      event.preventDefault();
+      event.stopPropagation();
+      await restoreLastClosedSession();
+      return;
+    }
     const id = activate();
     if (!id) return;
     if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "\\") {
@@ -3510,7 +3614,6 @@ function bindSplitTerminalEvents() {
       setActivePane("");
       return;
     }
-    const key = event.key.toLowerCase();
     const session = activeSession();
     const terminal = session ? terminalFor(session.id, id) : null;
     const applicationMode = !!(terminal && terminal.alternateScreen);
@@ -3878,6 +3981,13 @@ function bindEvents() {
 
   viewport.addEventListener("keydown", async (event) => {
     if (event.isComposing || event.key === "Process" || event.keyCode === 229) return;
+    const key = event.key.toLowerCase();
+    if (event.ctrlKey && event.shiftKey && !event.altKey && key === "t") {
+      event.preventDefault();
+      event.stopPropagation();
+      await restoreLastClosedSession();
+      return;
+    }
     setActivePane("");
     if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "\\") {
       event.preventDefault();
@@ -3887,7 +3997,6 @@ function bindEvents() {
       else await openSplitPane();
       return;
     }
-    const key = event.key.toLowerCase();
     const session = activeSession();
     const terminal = session ? terminalFor(session.id) : null;
     const applicationMode = !!(terminal && terminal.alternateScreen);
@@ -4062,6 +4171,12 @@ function bindEvents() {
   bindSplitTerminalEvents();
 
   window.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented) return;
+    if (event.ctrlKey && event.shiftKey && !event.altKey && event.key.toLowerCase() === "t") {
+      event.preventDefault();
+      restoreLastClosedSession();
+      return;
+    }
     const splitViewport = $("#splitTerminalViewport");
     const terminalFocused = viewport.contains(document.activeElement) || (splitViewport && splitViewport.contains(document.activeElement));
     if (terminalFocused) return;

@@ -111,6 +111,8 @@
 - Close tabs to the right
 - Restore last closed
 
+“恢复最近关闭”使用 `Ctrl+Shift+T` 或会话侧栏触发。若原 Connection Profile 仍存在，则以当前 Profile 配置新建 SSH Session；否则只恢复为只读历史标签。恢复不会尝试复活旧 transport，也不会跨应用重启持久化终端正文。
+
 ## 7. 会话菜单
 
 - Rename tab
