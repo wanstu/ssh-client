@@ -97,6 +97,136 @@ func TestManagerDirectPasswordSession(t *testing.T) {
 	}
 }
 
+func TestManagerCloneSessionCreatesIndependentConnection(t *testing.T) {
+	addr, stopServer := startTestSSHServer(t)
+	defer stopServer()
+
+	host, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var manager *Manager
+	events := make(chan any, 128)
+	manager = NewManager(t.TempDir(), func(event string, payload any) {
+		switch event {
+		case EventHostKey:
+			challenge := payload.(HostKeyChallenge)
+			if err := manager.ResolveHostKey(challenge.ID, "trust_once"); err != nil {
+				t.Errorf("resolve host key: %v", err)
+			}
+		case EventSessionState, EventOutput:
+			events <- payload
+		}
+	})
+
+	profile := model.DefaultProfile()
+	original, err := manager.Connect(ConnectConfig{
+		ProfileID:   "profile_clone",
+		Name:        "clone-test",
+		Host:        host,
+		Port:        port,
+		Username:    "tester",
+		Auth:        model.AuthConfig{Mode: "password"},
+		Terminal:    profile.Terminal,
+		Reconnect:   model.ReconnectConfig{Enabled: false, KeepTabOnDisconnect: true},
+		TimeoutSec:  3,
+		Credentials: Credentials{Password: "secret"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Disconnect(original.ID)
+
+	waitConnected := func(sessionID string) {
+		t.Helper()
+		deadline := time.After(5 * time.Second)
+		for {
+			select {
+			case payload := <-events:
+				if state, ok := payload.(SessionSnapshot); ok && state.ID == sessionID && state.State == "connected" {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("timed out waiting for session %s", sessionID)
+			}
+		}
+	}
+	waitConnected(original.ID)
+
+	cloned, err := manager.CloneSession(original.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cloned.ID == "" || cloned.ID == original.ID {
+		t.Fatalf("clone ID = %q, original ID = %q", cloned.ID, original.ID)
+	}
+	if cloned.ProfileID != original.ProfileID || cloned.Name != original.Name || cloned.Target != original.Target {
+		t.Fatalf("clone snapshot mismatch: original=%#v clone=%#v", original, cloned)
+	}
+	waitConnected(cloned.ID)
+
+	if err := manager.CloseSession(cloned.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Write(original.ID, "still-alive\r"); err != nil {
+		t.Fatalf("original session stopped after clone close: %v", err)
+	}
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case payload := <-events:
+			output, ok := payload.(OutputEvent)
+			if !ok || output.SessionID != original.ID {
+				continue
+			}
+			data, err := base64.StdEncoding.DecodeString(output.DataBase64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), "still-alive") {
+				return
+			}
+		case <-deadline:
+			t.Fatal("original session did not produce output after clone was closed")
+		}
+	}
+}
+
+func TestClosedSessionSuppressesLateStateEvents(t *testing.T) {
+	emitted := 0
+	manager := NewManager(t.TempDir(), func(event string, payload any) {
+		if event == EventSessionState {
+			emitted++
+		}
+	})
+	session := &managedSession{
+		closed: true,
+		snapshot: SessionSnapshot{
+			ID:    "session_closed",
+			State: "connected",
+		},
+	}
+
+	manager.setState(session, "connecting", "tcp_connect", "ignored", "", "")
+	manager.setConnected(session)
+	manager.setReconnectState(session, 1, 1, &runtimeError{Code: "CONNECTION_RESET", Stage: "connected", Err: errors.New("reset")})
+	manager.setFinalState(session, "disconnected", "ignored", "", "")
+	manager.emitState(session)
+
+	if emitted != 0 {
+		t.Fatalf("closed session emitted %d late state events", emitted)
+	}
+	if session.snapshot.State != "connected" {
+		t.Fatalf("closed session state mutated to %q", session.snapshot.State)
+	}
+}
+
 func TestEncodeTerminalInput(t *testing.T) {
 	utf8Payload, err := encodeTerminalInput("中文", "UTF-8")
 	if err != nil {

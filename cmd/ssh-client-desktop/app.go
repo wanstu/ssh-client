@@ -688,6 +688,9 @@ func (a *App) ResizePane(sessionID, paneID string, cols, rows int) error {
 func (a *App) ClosePane(sessionID, paneID string) error {
 	return a.sessions.ClosePane(sessionID, paneID)
 }
+func (a *App) CloneSession(id string) (sshclient.SessionSnapshot, error) {
+	return a.sessions.CloneSession(id)
+}
 func (a *App) RetrySession(id string) error           { return a.sessions.RetryNow(id) }
 func (a *App) DisconnectSession(id string) error      { return a.sessions.Disconnect(id) }
 func (a *App) CloseSession(id string) error           { return a.sessions.CloseSession(id) }

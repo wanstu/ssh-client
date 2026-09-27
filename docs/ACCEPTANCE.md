@@ -181,6 +181,11 @@
 - 切换不丢终端内容。
 - 活动 Session 关闭默认确认。
 - Disconnected 历史标签可直接关闭。
+- 标签右键菜单提供“克隆会话 / 关闭 / 关闭其他 / 关闭右侧”；没有右侧标签时“关闭右侧”禁用。
+- 克隆活动 Session 必须创建新的 SSH Session/transport，使用原 Session 的运行时连接配置；新旧 Session ID 不同，关闭克隆 Session 不得影响原 Session。
+- `history_only` 或已经结束的 Session 不允许直接 Clone Runtime Session。
+- “关闭其他 / 关闭右侧”涉及多个活动 Session 时只确认一次；每个真实 Session 仍分别进入最近关闭历史。
+- `CloseSession` 后不得再发送晚到的 Session State 事件，避免已关闭标签被 `disconnected` 状态重新加入 UI。
 - 关闭真实 Session 后进入“最近关闭”；关闭 `history_only` 标签不得再次写入最近关闭，避免循环历史。
 - `Ctrl+Shift+T` 与会话侧栏均恢复最新记录，并在触发后消费该记录，不能重复恢复同一条。
 - 原 Profile 仍存在时，恢复操作使用当前 Profile 配置重新建立新的 SSH Session；绝不尝试复活已死亡的旧 transport。

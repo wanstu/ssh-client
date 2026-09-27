@@ -44,6 +44,7 @@ type managedSession struct {
 	panes         map[string]*managedPane
 	retryNow      chan struct{}
 	stopReconnect bool
+	closed        bool
 }
 
 type Manager struct {
@@ -335,7 +336,43 @@ func (m *Manager) Disconnect(sessionID string) error {
 	return nil
 }
 
+func (m *Manager) CloneSession(sessionID string) (SessionSnapshot, error) {
+	ms, err := m.session(sessionID)
+	if err != nil {
+		return SessionSnapshot{}, err
+	}
+
+	ms.mu.Lock()
+	cfg := ms.cfg
+	state := ms.snapshot.State
+	closed := ms.closed
+	ms.mu.Unlock()
+
+	if closed {
+		return SessionSnapshot{}, fmt.Errorf("session %q is closed and cannot be cloned", sessionID)
+	}
+	switch state {
+	case "connecting", "authenticating", "host_key_pending", "connected", "reconnecting":
+	default:
+		return SessionSnapshot{}, fmt.Errorf("session %q is not active and cannot be cloned", sessionID)
+	}
+
+	return m.Connect(cfg)
+}
+
 func (m *Manager) CloseSession(sessionID string) error {
+	ms, err := m.session(sessionID)
+	if err != nil {
+		return err
+	}
+	ms.mu.Lock()
+	if ms.closed {
+		ms.mu.Unlock()
+		return nil
+	}
+	ms.closed = true
+	ms.mu.Unlock()
+
 	if err := m.Disconnect(sessionID); err != nil {
 		return err
 	}
@@ -670,6 +707,10 @@ func (s *managedSession) clearCredentials() {
 
 func (m *Manager) setState(ms *managedSession, state, stage, message, code, detail string) {
 	ms.mu.Lock()
+	if ms.closed {
+		ms.mu.Unlock()
+		return
+	}
 	ms.snapshot.State, ms.snapshot.Stage, ms.snapshot.Message = state, stage, message
 	ms.snapshot.ReasonCode, ms.snapshot.TechnicalDetail = code, detail
 	ms.snapshot.NextRetrySeconds = 0
@@ -681,6 +722,10 @@ func (m *Manager) setState(ms *managedSession, state, stage, message, code, deta
 func (m *Manager) setConnected(ms *managedSession) {
 	now := time.Now()
 	ms.mu.Lock()
+	if ms.closed {
+		ms.mu.Unlock()
+		return
+	}
 	ms.snapshot.State, ms.snapshot.Stage, ms.snapshot.Message = "connected", "connected", "已连接"
 	ms.snapshot.ReasonCode, ms.snapshot.TechnicalDetail = "", ""
 	ms.snapshot.ConnectedAtUnixMs = now.UnixMilli()
@@ -693,6 +738,10 @@ func (m *Manager) setConnected(ms *managedSession) {
 
 func (m *Manager) setReconnectState(ms *managedSession, attempt, seconds int, err *runtimeError) {
 	ms.mu.Lock()
+	if ms.closed {
+		ms.mu.Unlock()
+		return
+	}
 	ms.snapshot.State, ms.snapshot.Stage = "reconnecting", err.Stage
 	ms.snapshot.Message = "连接已中断，正在自动重连"
 	ms.snapshot.ReasonCode, ms.snapshot.TechnicalDetail = err.Code, err.Error()
@@ -705,6 +754,10 @@ func (m *Manager) setReconnectState(ms *managedSession, attempt, seconds int, er
 func (m *Manager) setFinalState(ms *managedSession, state, message, code, detail string) {
 	now := time.Now()
 	ms.mu.Lock()
+	if ms.closed {
+		ms.mu.Unlock()
+		return
+	}
 	ms.snapshot.State, ms.snapshot.Message = state, message
 	ms.snapshot.ReasonCode, ms.snapshot.TechnicalDetail = code, detail
 	ms.snapshot.NextRetrySeconds = 0
@@ -714,7 +767,16 @@ func (m *Manager) setFinalState(ms *managedSession, state, message, code, detail
 	m.emitEvent(EventSessionState, snapshot)
 }
 
-func (m *Manager) emitState(ms *managedSession) { m.emitEvent(EventSessionState, ms.copySnapshot()) }
+func (m *Manager) emitState(ms *managedSession) {
+	ms.mu.Lock()
+	if ms.closed {
+		ms.mu.Unlock()
+		return
+	}
+	snapshot := ms.snapshot
+	ms.mu.Unlock()
+	m.emitEvent(EventSessionState, snapshot)
+}
 func (m *Manager) emitEvent(event string, payload any) {
 	if m.emit != nil {
 		m.emit(event, payload)

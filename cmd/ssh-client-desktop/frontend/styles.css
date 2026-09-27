@@ -916,11 +916,11 @@ button, input, select {
   opacity: .55;
 }
 
-.profile-context-menu button.is-danger {
+.terminal-context-menu button.is-danger {
   color: var(--dk-danger);
 }
 
-.profile-context-menu button.is-danger:hover {
+.terminal-context-menu button.is-danger:hover {
   background: color-mix(in srgb, var(--dk-danger) 10%, transparent);
 }
 

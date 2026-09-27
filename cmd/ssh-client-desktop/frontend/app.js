@@ -18,6 +18,7 @@ import {
   WritePane,
   ResizePane,
   ClosePane,
+  CloneSession,
   RetrySession,
   DisconnectSession,
   CloseSession,
@@ -68,6 +69,7 @@ const state = {
   sidebarCollapsed: false,
   terminalContextSelection: "",
   profileContextId: "",
+  sessionContextId: "",
   history: [],
   commandHistory: [],
   promptPrefixes: new Map()
@@ -79,6 +81,7 @@ let visibleCommandItems = [];
 let terminalImeComposing = false;
 let terminalImeSuppressInput = false;
 let terminalFocusInside = false;
+let sessionBatchCloseDepth = 0;
 
 
 const TERMINAL_STYLE_CACHE_LIMIT = 4096;
@@ -1394,6 +1397,8 @@ function hideTerminalContextMenu() {
 }
 
 function showTerminalContextMenu(event, paneId = activePaneId()) {
+  hideProfileContextMenu();
+  hideSessionContextMenu();
   setActivePane(paneId);
   const menu = $("#terminalContextMenu");
   state.terminalContextSelection = terminalSelectionText(paneId);
@@ -1431,6 +1436,7 @@ function positionContextMenu(menu, event) {
 
 function showProfileContextMenu(event, profile) {
   hideTerminalContextMenu();
+  hideSessionContextMenu();
   const menu = $("#profileContextMenu");
   state.profileContextId = profile.id;
   state.selectedProfileId = profile.id;
@@ -1440,6 +1446,100 @@ function showProfileContextMenu(event, profile) {
   const favoriteLabel = menu.querySelector('[data-profile-action="favorite"] span');
   if (favoriteLabel) favoriteLabel.textContent = profile.favorite ? "取消收藏" : "收藏";
   positionContextMenu(menu, event);
+}
+
+function sessionById(sessionId) {
+  return state.sessions.find((session) => session.id === sessionId) || null;
+}
+
+function hideSessionContextMenu() {
+  const menu = $("#sessionContextMenu");
+  if (menu) menu.classList.add("is-hidden");
+  state.sessionContextId = "";
+}
+
+function sessionCanClone(session) {
+  return !!session && !session.history_only &&
+    ["connecting", "authenticating", "host_key_pending", "connected", "reconnecting"].includes(session.state);
+}
+
+function showSessionContextMenu(event, session) {
+  hideTerminalContextMenu();
+  hideProfileContextMenu();
+  const menu = $("#sessionContextMenu");
+  state.sessionContextId = session.id;
+
+  const index = state.sessions.findIndex((item) => item.id === session.id);
+  const clone = menu.querySelector('[data-session-action="clone"]');
+  const closeOthers = menu.querySelector('[data-session-action="close-others"]');
+  const closeRight = menu.querySelector('[data-session-action="close-right"]');
+  if (clone) clone.disabled = !sessionCanClone(session);
+  if (closeOthers) closeOthers.disabled = state.sessions.length <= 1;
+  if (closeRight) closeRight.disabled = index < 0 || index >= state.sessions.length - 1;
+
+  positionContextMenu(menu, event);
+}
+
+async function cloneRuntimeSession(session) {
+  if (!sessionCanClone(session)) {
+    showToast("当前会话状态不能克隆");
+    return;
+  }
+  try {
+    const cloned = await CloneSession(session.id);
+    updateSession(cloned);
+    selectSession(cloned.id);
+    showToast("已克隆会话“" + session.name + "”");
+  } catch (error) {
+    showToast("克隆会话失败：" + error);
+  }
+}
+
+function sessionIsActive(session) {
+  return !!session && !session.history_only &&
+    ["connected", "connecting", "reconnecting", "authenticating", "host_key_pending"].includes(session.state);
+}
+
+async function closeSessionSet(sessionIds, description) {
+  const wanted = new Set(sessionIds);
+  const targets = state.sessions.filter((session) => wanted.has(session.id));
+  if (!targets.length) return;
+
+  const activeCount = targets.filter(sessionIsActive).length;
+  if (activeCount > 0) {
+    const message = description + "？其中 " + activeCount + " 个会话仍在活动，将断开 SSH 连接。";
+    if (!window.confirm(message)) return;
+  }
+
+  let failed = 0;
+  sessionBatchCloseDepth++;
+  try {
+    for (const session of targets) {
+      const ok = await closeSession(session.id, { skipConfirm: true, render: false, showError: false });
+      if (!ok) failed++;
+    }
+  } finally {
+    sessionBatchCloseDepth = Math.max(0, sessionBatchCloseDepth - 1);
+    renderAll();
+  }
+
+  if (failed) showToast("有 " + failed + " 个会话未能关闭");
+}
+
+async function closeOtherSessions(session) {
+  if (!session) return;
+  await closeSessionSet(
+    state.sessions.filter((item) => item.id !== session.id).map((item) => item.id),
+    "关闭其他 " + Math.max(0, state.sessions.length - 1) + " 个标签"
+  );
+}
+
+async function closeSessionsToRight(session) {
+  if (!session) return;
+  const index = state.sessions.findIndex((item) => item.id === session.id);
+  if (index < 0 || index >= state.sessions.length - 1) return;
+  const ids = state.sessions.slice(index + 1).map((item) => item.id);
+  await closeSessionSet(ids, "关闭右侧 " + ids.length + " 个标签");
 }
 
 async function duplicateConnectionProfile(profile) {
@@ -2204,6 +2304,10 @@ function renderSessions() {
 
     tab.append(dot, title, close);
     tab.addEventListener("click", () => selectSession(session.id));
+    tab.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      showSessionContextMenu(event, session);
+    });
     tabs.append(tab);
   }
 }
@@ -3161,9 +3265,13 @@ async function resolveHostKey(action) {
   }
 }
 
-async function closeSession(id) {
+async function closeSession(id, options = {}) {
   const session = state.sessions.find((item) => item.id === id);
-  if (!session) return;
+  if (!session) return true;
+
+  const skipConfirm = !!options.skipConfirm;
+  const shouldRender = options.render !== false;
+  const showError = options.showError !== false;
 
   if (session.history_only) {
     state.sessions = state.sessions.filter((item) => item.id !== id);
@@ -3171,13 +3279,13 @@ async function closeSession(id) {
     if (state.activeSessionId === id) {
       state.activeSessionId = state.sessions.length ? state.sessions[state.sessions.length - 1].id : "";
     }
-    renderAll();
-    return;
+    if (shouldRender) renderAll();
+    return true;
   }
 
-  if (["connected", "connecting", "reconnecting", "authenticating", "host_key_pending"].includes(session.state)) {
+  if (!skipConfirm && sessionIsActive(session)) {
     const confirmed = window.confirm("当前会话仍在活动。断开并关闭这个标签？");
-    if (!confirmed) return;
+    if (!confirmed) return false;
   }
 
   const terminalText = terminalFor(id).render(false);
@@ -3189,9 +3297,11 @@ async function closeSession(id) {
     if (state.activeSessionId === id) {
       state.activeSessionId = state.sessions.length ? state.sessions[state.sessions.length - 1].id : "";
     }
-    renderAll();
+    if (shouldRender) renderAll();
+    return true;
   } catch (error) {
-    showToast(String(error));
+    if (showError) showToast(String(error));
+    return false;
   }
 }
 
@@ -3766,7 +3876,7 @@ function bindEvents() {
     if (state.activeSessionId === payload.session_id) {
       state.activeSessionId = state.sessions.length ? state.sessions[state.sessions.length - 1].id : "";
     }
-    renderAll();
+    if (sessionBatchCloseDepth === 0) renderAll();
   });
 
   $("#newProfileButton").addEventListener("click", () => openProfileDialog());
@@ -4153,17 +4263,33 @@ function bindEvents() {
     });
   });
 
+  $("#sessionContextMenu").querySelectorAll("[data-session-action]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const session = sessionById(state.sessionContextId);
+      const action = button.dataset.sessionAction;
+      hideSessionContextMenu();
+      if (!session) return;
+      if (action === "clone") await cloneRuntimeSession(session);
+      if (action === "close") await closeSession(session.id);
+      if (action === "close-others") await closeOtherSessions(session);
+      if (action === "close-right") await closeSessionsToRight(session);
+    });
+  });
+
   document.addEventListener("pointerdown", (event) => {
     if (!$("#terminalContextMenu").contains(event.target)) hideTerminalContextMenu();
     if (!$("#profileContextMenu").contains(event.target)) hideProfileContextMenu();
+    if (!$("#sessionContextMenu").contains(event.target)) hideSessionContextMenu();
   });
   window.addEventListener("blur", () => {
     hideTerminalContextMenu();
     hideProfileContextMenu();
+    hideSessionContextMenu();
   });
   window.addEventListener("resize", () => {
     hideTerminalContextMenu();
     hideProfileContextMenu();
+    hideSessionContextMenu();
   });
 
   const resizeObserver = new ResizeObserver(() => scheduleActiveTerminalResize());
