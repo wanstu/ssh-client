@@ -153,9 +153,11 @@ Reconnect 对 Profile Session 复用原 Session ID，只替换 SSH transport / P
 
 命令片段的动作是“插入文本”，不是“自动执行”。
 
-默认不发送 Enter。
+当前 Desktop 将命令片段保存在本地 Settings，字段为名称、单行命令和 Tags；支持新建、编辑、删除以及按名称 / 命令正文 / Tags 搜索。左侧片段列表的“插入”、双击片段以及 Ctrl+K 中的片段结果，都只把命令文本写入当前聚焦 Pane。
 
-禁止把命令片段系统设计成无确认的远程批量命令执行器。
+默认不发送 Enter，也不允许片段正文包含 CR/LF、Tab、ESC、Ctrl+C 等控制字符。限制为普通单行文本是为了保证“插入”本身不会夹带终端控制动作；用户仍需在终端中明确按 Enter 才会执行。
+
+没有已连接 SSH Session 时“插入”不可用。禁止把命令片段系统设计成无确认的一键或批量远程命令执行器。
 
 ## 11. Ctrl+K
 
@@ -163,6 +165,7 @@ Reconnect 对 Profile Session 复用原 Session ID，只替换 SSH transport / P
 
 - 搜索连接
 - 搜索当前与最近会话
+- 搜索命令片段并插入当前 Pane
 - 复制当前选中连接
 - 新建连接
 - 快速连接

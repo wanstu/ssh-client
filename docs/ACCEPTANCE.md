@@ -174,6 +174,11 @@
 - 第一阶段只左右二分，每个 Session 最多 2 个 Pane；工具栏“左右分屏”和 `Alt+\\` 均可进入/切换分屏。
 - 两个 Pane 分别处理输入、中文 IME、ANSI 状态、scrollback、鼠标协议和 PTY resize；关闭第二 Pane 不得断开主 Session。
 - 主 Session 断开或重连时，附属 Pane 必须关闭并清理本地终端缓冲，不残留幽灵 Pane。
+- 命令片段持久化在本地 Settings，至少包含 `id / name / command / tags`；旧 Settings 没有 `snippets` 字段时必须兼容为空列表，不升级 settings version。
+- 命令片段支持新建、编辑、删除，并按名称、命令正文和 Tags 搜索；名称大小写不敏感唯一。
+- 命令片段正文只允许普通单行文本，禁止 C0 / DEL 控制字符（包括 CR/LF、Tab、ESC、Ctrl+C 等）；单条正文上限 16 KiB。该限制用于保证“插入”本身不会夹带终端控制动作。
+- 左侧“插入”、双击片段和 Ctrl+K 片段结果都只向当前聚焦 Pane 写入正文原文，不附加 Enter / CR / LF；必须由用户随后明确按 Enter 执行。
+- 没有 `connected` Session 时片段插入不可用；分屏存在时必须写入当前聚焦 Pane，并沿用该 Session 的终端编码。
 
 ## 13. Session Tabs
 

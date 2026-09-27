@@ -21,6 +21,13 @@ type ConnectionGroup struct {
 	Order int    `json:"order"`
 }
 
+type CommandSnippet struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Command string   `json:"command"`
+	Tags    []string `json:"tags,omitempty"`
+}
+
 type AuthConfig struct {
 	Mode           string `json:"mode"`
 	PrivateKeyPath string `json:"private_key_path,omitempty"`
@@ -77,6 +84,7 @@ type Settings struct {
 	Theme    ThemeSettings       `json:"theme"`
 	Groups   []ConnectionGroup   `json:"groups"`
 	Profiles []ConnectionProfile `json:"profiles"`
+	Snippets []CommandSnippet    `json:"snippets,omitempty"`
 }
 
 func DefaultSettings() Settings {
@@ -143,6 +151,60 @@ func (s Settings) Validate() error {
 			if _, ok := profileIDs[profile.Network.JumpProfileID]; !ok {
 				return fmt.Errorf("profile %q references unknown jump profile %q", profile.Name, profile.Network.JumpProfileID)
 			}
+		}
+	}
+
+	snippetIDs := make(map[string]struct{}, len(s.Snippets))
+	snippetNames := make(map[string]struct{}, len(s.Snippets))
+	for _, snippet := range s.Snippets {
+		if err := snippet.Validate(); err != nil {
+			return fmt.Errorf("snippet %q: %w", snippet.Name, err)
+		}
+		if _, ok := snippetIDs[snippet.ID]; ok {
+			return fmt.Errorf("duplicate snippet id %q", snippet.ID)
+		}
+		snippetIDs[snippet.ID] = struct{}{}
+		nameKey := strings.ToLower(strings.TrimSpace(snippet.Name))
+		if _, ok := snippetNames[nameKey]; ok {
+			return fmt.Errorf("duplicate snippet name %q", snippet.Name)
+		}
+		snippetNames[nameKey] = struct{}{}
+	}
+	return nil
+}
+
+func (s CommandSnippet) Validate() error {
+	if strings.TrimSpace(s.ID) == "" {
+		return errors.New("id is required")
+	}
+	name := strings.TrimSpace(s.Name)
+	if name == "" {
+		return errors.New("name is required")
+	}
+	if len([]rune(name)) > 80 {
+		return errors.New("name is too long")
+	}
+	if strings.TrimSpace(s.Command) == "" {
+		return errors.New("command is required")
+	}
+	for _, r := range s.Command {
+		if r < 0x20 || r == 0x7f {
+			return errors.New("command cannot contain control characters")
+		}
+	}
+	if len(s.Command) > 16*1024 {
+		return errors.New("command is too long")
+	}
+	if len(s.Tags) > 20 {
+		return errors.New("too many tags")
+	}
+	for _, tag := range s.Tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			return errors.New("tag cannot be empty")
+		}
+		if len([]rune(tag)) > 40 {
+			return fmt.Errorf("tag %q is too long", tag)
 		}
 	}
 	return nil

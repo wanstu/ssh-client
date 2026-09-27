@@ -5,6 +5,9 @@ import {
   CreateGroup,
   RenameGroup,
   DeleteGroup,
+  CreateSnippet,
+  UpdateSnippet,
+  DeleteSnippet,
   CreateProfile,
   UpdateProfile,
   DuplicateProfile,
@@ -52,6 +55,7 @@ const state = {
   themePacks: [...BUILTIN_THEME_PACKS],
   themeCatalog: { source: "builtin", stale: false, last_error: "" },
   selectedProfileId: "",
+  selectedSnippetId: "",
   activeSessionId: "",
   nav: "connections",
   terminals: new Map(),
@@ -1430,6 +1434,183 @@ function profileById(profileId) {
   return (state.settings.profiles || []).find((profile) => profile.id === profileId) || null;
 }
 
+function snippetById(snippetId) {
+  return (state.settings.snippets || []).find((snippet) => snippet.id === snippetId) || null;
+}
+
+function snippetInsertAvailable() {
+  const session = activeSession();
+  return !!session && !session.history_only && session.state === "connected";
+}
+
+async function insertSnippet(snippet) {
+  if (!snippet) return false;
+  const session = activeSession();
+  if (!session || session.history_only || session.state !== "connected") {
+    showToast("请先连接 SSH 会话，再插入命令片段");
+    return false;
+  }
+  if (/[\u0000-\u001f\u007f]/.test(snippet.command || "")) {
+    showToast("片段包含换行或控制字符，为避免触发远端动作，请先编辑为普通单行文本");
+    return false;
+  }
+  const paneId = activePaneId(session.id);
+  try {
+    await sendTerminalData(snippet.command, paneId);
+    window.setTimeout(() => focusTerminalInput(paneId), 0);
+    showToast("已插入“" + snippet.name + "”，未执行");
+    return true;
+  } catch (error) {
+    showToast("插入命令片段失败：" + error);
+    return false;
+  }
+}
+
+function openSnippetDialog(snippet = null) {
+  const editing = !!snippet;
+  $("#snippetDialogTitle").textContent = editing ? "编辑命令片段" : "新建命令片段";
+  $("#snippetId").value = editing ? snippet.id : "";
+  $("#snippetName").value = editing ? snippet.name : "";
+  $("#snippetCommand").value = editing ? snippet.command : "";
+  $("#snippetTags").value = editing ? (snippet.tags || []).join(", ") : "";
+  $("#snippetError").classList.add("is-hidden");
+  $("#deleteSnippetButton").classList.toggle("is-hidden", !editing);
+  const dialog = $("#snippetDialog");
+  if (!dialog.open) dialog.showModal();
+  window.setTimeout(() => $("#snippetName").focus(), 0);
+}
+
+function closeSnippetDialog() {
+  const dialog = $("#snippetDialog");
+  if (dialog.open) dialog.close();
+}
+
+function snippetFormValue() {
+  return {
+    id: $("#snippetId").value.trim(),
+    name: $("#snippetName").value.trim(),
+    command: $("#snippetCommand").value,
+    tags: $("#snippetTags").value
+      .split(/[,，]/)
+      .map((tag) => tag.trim())
+      .filter(Boolean)
+  };
+}
+
+async function saveSnippet() {
+  const snippet = snippetFormValue();
+  const errorBox = $("#snippetError");
+  errorBox.classList.add("is-hidden");
+  if (!snippet.name || !snippet.command.trim()) {
+    errorBox.textContent = "名称和命令文本不能为空";
+    errorBox.classList.remove("is-hidden");
+    return;
+  }
+  if (/[\u0000-\u001f\u007f]/.test(snippet.command)) {
+    errorBox.textContent = "命令片段只能包含普通单行文本，不能包含换行、Tab、ESC 等控制字符";
+    errorBox.classList.remove("is-hidden");
+    return;
+  }
+
+  try {
+    if (snippet.id) {
+      const next = await UpdateSnippet(snippet);
+      state.settings = next.settings;
+      state.selectedSnippetId = snippet.id;
+      showToast("命令片段已保存");
+    } else {
+      const before = new Set((state.settings.snippets || []).map((item) => item.id));
+      const next = await CreateSnippet(snippet);
+      state.settings = next.settings;
+      const created = (state.settings.snippets || []).find((item) => !before.has(item.id));
+      state.selectedSnippetId = created ? created.id : "";
+      showToast("命令片段已创建");
+    }
+    closeSnippetDialog();
+    if (state.nav === "snippets") renderSidebar();
+  } catch (error) {
+    errorBox.textContent = String(error);
+    errorBox.classList.remove("is-hidden");
+  }
+}
+
+async function deleteSelectedSnippet() {
+  const snippet = snippetById($("#snippetId").value.trim());
+  if (!snippet) return;
+  if (!window.confirm("删除命令片段“" + snippet.name + "”？")) return;
+  try {
+    const next = await DeleteSnippet(snippet.id);
+    state.settings = next.settings;
+    if (state.selectedSnippetId === snippet.id) state.selectedSnippetId = "";
+    closeSnippetDialog();
+    if (state.nav === "snippets") renderSidebar();
+    showToast("命令片段已删除");
+  } catch (error) {
+    const errorBox = $("#snippetError");
+    errorBox.textContent = String(error);
+    errorBox.classList.remove("is-hidden");
+  }
+}
+
+function renderSnippetSidebar(list, snippets, query) {
+  if (!snippets.length) {
+    const empty = document.createElement("div");
+    empty.className = "dk-empty-state";
+    empty.innerHTML = query
+      ? "<div><strong>没有匹配的命令片段</strong><p>尝试搜索名称、命令文本或标签。</p></div>"
+      : "<div><strong>还没有命令片段</strong><p>点击右上角 ＋ 创建。片段只插入，不会自动执行。</p></div>";
+    list.append(empty);
+    return;
+  }
+
+  for (const snippet of snippets) {
+    const row = document.createElement("div");
+    row.className = "snippet-row" + (snippet.id === state.selectedSnippetId ? " is-selected" : "");
+    row.dataset.snippetId = snippet.id;
+
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "snippet-main";
+    main.title = "单击选择，双击插入到当前终端";
+    const name = document.createElement("strong");
+    name.textContent = snippet.name;
+    const command = document.createElement("code");
+    command.textContent = String(snippet.command || "").replace(/\r?\n/g, " ↵ ");
+    const tags = document.createElement("span");
+    tags.className = "snippet-tags";
+    tags.textContent = (snippet.tags || []).map((tag) => "#" + tag).join(" ");
+    main.append(name, command);
+    if (tags.textContent) main.append(tags);
+    main.addEventListener("click", () => {
+      state.selectedSnippetId = snippet.id;
+      document.querySelectorAll(".snippet-row").forEach((item) => {
+        item.classList.toggle("is-selected", item.dataset.snippetId === snippet.id);
+      });
+    });
+    main.addEventListener("dblclick", () => insertSnippet(snippet));
+
+    const actions = document.createElement("div");
+    actions.className = "snippet-actions";
+    const insert = document.createElement("button");
+    insert.type = "button";
+    insert.className = "dk-button dk-button-secondary compact-button";
+    insert.textContent = "插入";
+    insert.disabled = !snippetInsertAvailable();
+    insert.title = insert.disabled ? "请先连接 SSH 会话" : "插入当前 Pane，不自动执行";
+    insert.addEventListener("click", () => insertSnippet(snippet));
+
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "dk-button dk-button-ghost compact-button";
+    edit.textContent = "编辑";
+    edit.addEventListener("click", () => openSnippetDialog(snippet));
+    actions.append(insert, edit);
+
+    row.append(main, actions);
+    list.append(row);
+  }
+}
+
 function hideProfileContextMenu() {
   const menu = $("#profileContextMenu");
   if (menu) menu.classList.add("is-hidden");
@@ -1786,6 +1967,19 @@ function buildCommandItems() {
     });
   }
 
+  for (const snippet of state.settings.snippets || []) {
+    const preview = String(snippet.command || "").replace(/\s+/g, " ").trim();
+    items.push({
+      kind: "片段",
+      icon: "</>",
+      label: snippet.name,
+      detail: preview.length > 90 ? preview.slice(0, 90) + "…" : preview,
+      meta: snippetInsertAvailable() ? "插入" : "需连接",
+      keywords: [snippet.name, snippet.command, ...(snippet.tags || [])].join(" "),
+      action: () => insertSnippet(snippet)
+    });
+  }
+
   const selectedProfile = profileById(state.selectedProfileId);
   if (selectedProfile) {
     items.push({
@@ -1909,7 +2103,7 @@ function renderCommandPalette() {
   if (!visibleCommandItems.length) {
     const empty = document.createElement("div");
     empty.className = "command-empty";
-    empty.textContent = "没有匹配的连接、会话或操作";
+    empty.textContent = "没有匹配的连接、会话、片段或操作";
     results.append(empty);
     return;
   }
@@ -2032,6 +2226,7 @@ async function loadState() {
   state.settings = next.settings;
   state.sessions = next.sessions || [];
   pruneSessionTabState();
+  if (state.selectedSnippetId && !snippetById(state.selectedSnippetId)) state.selectedSnippetId = "";
   state.commandHistory = next.command_history || [];
   state.launchAtLogin = !!next.launch_at_login;
   state.launchAtLoginSupported = !!next.launch_at_login_supported;
@@ -2060,9 +2255,16 @@ function renderSidebar() {
   const search = $("#connectionSearch");
   list.replaceChildren();
 
+  const connectionsNav = state.nav === "connections";
+  $("#importConfigButton").classList.toggle("is-hidden", !connectionsNav);
+  $("#newProfileButton").classList.toggle("is-hidden", !connectionsNav);
+  $("#newSnippetButton").classList.toggle("is-hidden", state.nav !== "snippets");
+
   search.placeholder = state.nav === "history"
     ? "搜索命令或目标主机"
-    : "搜索名称、地址、用户或标签";
+    : state.nav === "snippets"
+      ? "搜索片段名称、命令或标签"
+      : "搜索名称、地址、用户或标签";
 
   if (state.nav === "sessions") {
     title.textContent = "会话";
@@ -2087,12 +2289,21 @@ function renderSidebar() {
   }
 
   if (state.nav === "snippets") {
+    const allSnippets = state.settings.snippets || [];
+    const query = state.search.trim().toLowerCase();
+    const filtered = allSnippets.filter((snippet) => {
+      if (!query) return true;
+      return [snippet.name, snippet.command, ...(snippet.tags || [])]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    });
     title.textContent = "命令片段";
-    meta.textContent = "第一阶段只保留插入语义";
-    const empty = document.createElement("div");
-    empty.className = "dk-empty-state";
-    empty.innerHTML = "<div><strong>命令片段稍后接入</strong><p>不会设计成无确认的一键远程执行。</p></div>";
-    list.append(empty);
+    meta.textContent = query
+      ? String(filtered.length) + " / " + String(allSnippets.length) + " 个 · 只插入不执行"
+      : String(allSnippets.length) + " 个 · 只插入不执行";
+    renderSnippetSidebar(list, filtered, query);
     return;
   }
 
@@ -4110,6 +4321,7 @@ function bindEvents() {
   });
 
   $("#newProfileButton").addEventListener("click", () => openProfileDialog());
+  $("#newSnippetButton").addEventListener("click", () => openSnippetDialog());
   $("#importConfigButton").addEventListener("click", openImportDialog);
   $("#welcomeNewButton").addEventListener("click", () => openProfileDialog());
   $("#quickConnectButton").addEventListener("click", openQuickDialog);
@@ -4164,6 +4376,14 @@ function bindEvents() {
   $("#sessionRenameDialog").addEventListener("close", () => {
     state.sessionRenameId = "";
   });
+
+  $("#snippetForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await saveSnippet();
+  });
+  $("#snippetCloseButton").addEventListener("click", closeSnippetDialog);
+  $("#snippetCancelButton").addEventListener("click", closeSnippetDialog);
+  $("#deleteSnippetButton").addEventListener("click", deleteSelectedSnippet);
 
   $("#profileAuthMode").addEventListener("change", updatePrivateKeyVisibility);
   $("#profileForm").addEventListener("submit", async (event) => {

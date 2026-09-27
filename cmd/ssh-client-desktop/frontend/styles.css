@@ -355,6 +355,74 @@ button, input, select {
   margin-top: 18px;
 }
 
+.snippet-row {
+  width: 100%;
+  min-height: 74px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: transparent;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 8px;
+}
+
+.snippet-row:hover {
+  background: var(--dk-bg-subtle);
+}
+
+.snippet-row.is-selected {
+  background: var(--dk-nav-active-bg);
+  box-shadow: inset 3px 0 0 var(--dk-nav-active-accent);
+}
+
+.snippet-main {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dk-text);
+  display: grid;
+  gap: 4px;
+  padding: 2px 3px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.snippet-main strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
+.snippet-main code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dk-text-secondary);
+  font: 10.5px/1.45 "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+}
+
+.snippet-tags {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dk-primary);
+  font-size: 9.5px;
+}
+
+.snippet-actions {
+  display: grid;
+  gap: 5px;
+}
+
+.snippet-actions .compact-button {
+  min-width: 44px;
+  padding-left: 7px;
+  padding-right: 7px;
+}
+
 .connection-row {
   width: 100%;
   min-height: 60px;
@@ -1458,6 +1526,26 @@ button, input, select {
   color: var(--dk-text-secondary);
   font-size: 10px;
   line-height: 1.5;
+}
+
+.snippet-command-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 132px;
+  resize: vertical;
+  border: 1px solid var(--dk-border);
+  border-radius: var(--dk-radius-sm);
+  background: var(--dk-bg-app);
+  color: var(--dk-text);
+  padding: 9px 10px;
+  outline: none;
+  font: 11.5px/1.55 "Cascadia Mono", "Cascadia Code", Consolas, "NSimSun", monospace;
+  font-variant-ligatures: none;
+}
+
+.snippet-command-input:focus {
+  border-color: color-mix(in srgb, var(--dk-primary) 68%, var(--dk-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dk-primary) 12%, transparent);
 }
 
 .dialog-actions {

@@ -11,6 +11,7 @@ import (
 	"github.com/wanstu/ssh-client/internal/config"
 	"github.com/wanstu/ssh-client/internal/model"
 	"github.com/wanstu/ssh-client/internal/sshclient"
+	kitautostart "github.com/wanstu/wails-desktop-kit/autostart"
 	"github.com/wanstu/wails-desktop-kit/secureconfig"
 )
 
@@ -77,11 +78,19 @@ func newCredentialTestApp(t *testing.T) (*App, model.ConnectionProfile) {
 		t.Fatal(err)
 	}
 
+	launchAtLogin, err := kitautostart.New(kitautostart.Config{
+		ID: "ssh-client-test", DisplayName: "SSH Client Test", Arguments: []string{"--autostart"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	app := &App{
 		store:             store,
 		secure:            secure,
+		launchAtLogin:     launchAtLogin,
 		pendingCredential: map[string]pendingCredentialAction{},
 	}
+	app.sessions = sshclient.NewManager(dir, app.emit)
 	return app, profile
 }
 
@@ -253,6 +262,74 @@ func TestDuplicateProfileNameAvoidsCollisions(t *testing.T) {
 	}
 	if got := duplicateProfileName(profiles, "staging"); got != "staging 副本" {
 		t.Fatalf("duplicateProfileName() = %q, want %q", got, "staging 副本")
+	}
+}
+
+func TestCommandSnippetCRUD(t *testing.T) {
+	app, _ := newCredentialTestApp(t)
+	originalCommand := "  journalctl -u app --since today | tail -n 50  "
+
+	created, err := app.CreateSnippet(model.CommandSnippet{
+		Name:    "  日志查看  ",
+		Command: originalCommand,
+		Tags:    []string{" ops ", "OPS", " prod "},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(created.Settings.Snippets) != 1 {
+		t.Fatalf("snippet count = %d", len(created.Settings.Snippets))
+	}
+	snippet := created.Settings.Snippets[0]
+	if snippet.ID == "" || snippet.Name != "日志查看" {
+		t.Fatalf("unexpected snippet identity: %#v", snippet)
+	}
+	if snippet.Command != originalCommand {
+		t.Fatalf("command was modified: %q", snippet.Command)
+	}
+	if len(snippet.Tags) != 2 || snippet.Tags[0] != "ops" || snippet.Tags[1] != "prod" {
+		t.Fatalf("tags were not normalized: %#v", snippet.Tags)
+	}
+
+	if _, err := app.CreateSnippet(model.CommandSnippet{Name: "日志查看", Command: "pwd"}); err == nil {
+		t.Fatal("expected duplicate snippet name error")
+	}
+
+	snippet.Name = "日志尾部"
+	snippet.Command = "tail -f /var/log/app.log"
+	updated, err := app.UpdateSnippet(snippet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Settings.Snippets) != 1 || updated.Settings.Snippets[0].Name != "日志尾部" {
+		t.Fatalf("snippet update failed: %#v", updated.Settings.Snippets)
+	}
+
+	deleted, err := app.DeleteSnippet(snippet.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted.Settings.Snippets) != 0 {
+		t.Fatalf("snippet delete failed: %#v", deleted.Settings.Snippets)
+	}
+}
+
+func TestCommandSnippetValidation(t *testing.T) {
+	settings := model.DefaultSettings()
+	settings.Snippets = []model.CommandSnippet{{ID: "snippet_1", Name: "pwd", Command: "pwd"}}
+	if err := settings.Validate(); err != nil {
+		t.Fatalf("valid snippet rejected: %v", err)
+	}
+
+	settings.Snippets = append(settings.Snippets, model.CommandSnippet{ID: "snippet_2", Name: "PWD", Command: "pwd"})
+	if err := settings.Validate(); err == nil {
+		t.Fatal("expected duplicate snippet name validation error")
+	}
+
+	settings = model.DefaultSettings()
+	settings.Snippets = []model.CommandSnippet{{ID: "snippet_multi", Name: "multi", Command: "echo one\necho two"}}
+	if err := settings.Validate(); err == nil {
+		t.Fatal("expected multiline snippet validation error")
 	}
 }
 

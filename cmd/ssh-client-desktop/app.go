@@ -398,6 +398,81 @@ func (a *App) DeleteGroup(id string) (UIState, error) {
 	return a.GetState()
 }
 
+func (a *App) CreateSnippet(snippet model.CommandSnippet) (UIState, error) {
+	snippet = normalizeSnippet(snippet)
+	snippet.ID = a.store.NewID("snippet")
+	if err := snippet.Validate(); err != nil {
+		return UIState{}, err
+	}
+	_, err := a.store.Update(func(settings *model.Settings) error {
+		for _, existing := range settings.Snippets {
+			if strings.EqualFold(existing.Name, snippet.Name) {
+				return fmt.Errorf("命令片段名称 %q 已存在", snippet.Name)
+			}
+		}
+		settings.Snippets = append(settings.Snippets, snippet)
+		return nil
+	})
+	if err != nil {
+		return UIState{}, err
+	}
+	return a.GetState()
+}
+
+func (a *App) UpdateSnippet(snippet model.CommandSnippet) (UIState, error) {
+	snippet = normalizeSnippet(snippet)
+	if snippet.ID == "" {
+		return UIState{}, errors.New("命令片段 ID 不能为空")
+	}
+	if err := snippet.Validate(); err != nil {
+		return UIState{}, err
+	}
+	_, err := a.store.Update(func(settings *model.Settings) error {
+		found := false
+		for i, existing := range settings.Snippets {
+			if existing.ID == snippet.ID {
+				settings.Snippets[i] = snippet
+				found = true
+				continue
+			}
+			if strings.EqualFold(existing.Name, snippet.Name) {
+				return fmt.Errorf("命令片段名称 %q 已存在", snippet.Name)
+			}
+		}
+		if !found {
+			return fmt.Errorf("命令片段 %q 不存在", snippet.ID)
+		}
+		return nil
+	})
+	if err != nil {
+		return UIState{}, err
+	}
+	return a.GetState()
+}
+
+func (a *App) DeleteSnippet(id string) (UIState, error) {
+	_, err := a.store.Update(func(settings *model.Settings) error {
+		found := false
+		next := settings.Snippets[:0]
+		for _, snippet := range settings.Snippets {
+			if snippet.ID == id {
+				found = true
+				continue
+			}
+			next = append(next, snippet)
+		}
+		if !found {
+			return fmt.Errorf("命令片段 %q 不存在", id)
+		}
+		settings.Snippets = next
+		return nil
+	})
+	if err != nil {
+		return UIState{}, err
+	}
+	return a.GetState()
+}
+
 func (a *App) CreateProfile(profile model.ConnectionProfile) (UIState, error) {
 	profile = normalizeProfile(profile)
 	profile.ID = a.store.NewID("profile")
@@ -990,6 +1065,26 @@ func proxyJumpAlias(value string) string {
 		value = value[:colon]
 	}
 	return strings.TrimSpace(value)
+}
+
+func normalizeSnippet(snippet model.CommandSnippet) model.CommandSnippet {
+	snippet.Name = strings.TrimSpace(snippet.Name)
+	seen := map[string]struct{}{}
+	tags := make([]string, 0, len(snippet.Tags))
+	for _, tag := range snippet.Tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		key := strings.ToLower(tag)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		tags = append(tags, tag)
+	}
+	snippet.Tags = tags
+	return snippet
 }
 
 func normalizeProfile(profile model.ConnectionProfile) model.ConnectionProfile {
