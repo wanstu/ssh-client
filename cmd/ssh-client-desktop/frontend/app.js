@@ -19,10 +19,12 @@ import {
   ResizePane,
   ClosePane,
   CloneSession,
+  ReconnectProfileSession,
   RetrySession,
   DisconnectSession,
   CloseSession,
   ResolveHostKey,
+  ExportTerminalText,
   ChoosePrivateKey,
   PreviewSSHConfig,
   ChooseSSHConfig,
@@ -58,6 +60,7 @@ const state = {
   activePaneBySession: new Map(),
   pendingSplitSessions: new Set(),
   pendingProfile: null,
+  pendingReconnectSessionId: "",
   pendingHostKey: null,
   pendingQuickSaves: new Map(),
   importPreview: null,
@@ -577,6 +580,12 @@ class TerminalBuffer {
       const candidates = [...this.tabStops].filter((c) => c < this.col).sort((a,b) => b-a);
       this.col = candidates.length ? candidates[0] : 0;
     }
+  }
+
+  clearDisplay() {
+    this.screen = Array.from({ length: this.rows }, () => this.blankRow());
+    this.styleScreen = Array.from({ length: this.rows }, () => this.blankStyleRow());
+    this.wrapPending = false;
   }
 
   reset() {
@@ -1558,6 +1567,12 @@ function sessionCanClone(session) {
     ["connecting", "authenticating", "host_key_pending", "connected", "reconnecting"].includes(session.state);
 }
 
+function sessionCanReconnect(session) {
+  if (!session || session.history_only) return false;
+  if (session.state === "reconnecting") return true;
+  return !!session.profile_id && ["disconnected", "failed", "security_blocked"].includes(session.state);
+}
+
 function showSessionContextMenu(event, session) {
   hideTerminalContextMenu();
   hideProfileContextMenu();
@@ -1568,10 +1583,14 @@ function showSessionContextMenu(event, session) {
   const index = ordered.findIndex((item) => item.id === session.id);
   const pinLabel = menu.querySelector('[data-session-action="pin"] span');
   const clone = menu.querySelector('[data-session-action="clone"]');
+  const reconnect = menu.querySelector('[data-session-action="reconnect"]');
+  const disconnect = menu.querySelector('[data-session-action="disconnect"]');
   const closeOthers = menu.querySelector('[data-session-action="close-others"]');
   const closeRight = menu.querySelector('[data-session-action="close-right"]');
   if (pinLabel) pinLabel.textContent = state.pinnedSessionIds.has(session.id) ? "取消固定" : "固定标签";
   if (clone) clone.disabled = !sessionCanClone(session);
+  if (reconnect) reconnect.disabled = !sessionCanReconnect(session);
+  if (disconnect) disconnect.disabled = !sessionIsActive(session);
   if (closeOthers) closeOthers.disabled = ordered.length <= 1;
   if (closeRight) closeRight.disabled = index < 0 || index >= ordered.length - 1;
 
@@ -1590,6 +1609,62 @@ async function cloneRuntimeSession(session) {
     showToast("已克隆会话“" + sessionTabName(session) + "”");
   } catch (error) {
     showToast("克隆会话失败：" + error);
+  }
+}
+
+async function reconnectRuntimeSession(session) {
+  if (!session || session.history_only) return;
+  if (session.state === "reconnecting") {
+    try {
+      await RetrySession(session.id);
+      showToast("已立即重试连接");
+    } catch (error) {
+      showToast("重试失败：" + error);
+    }
+    return;
+  }
+  if (!session.profile_id) {
+    showToast("临时快速连接已清除认证信息，请重新使用快速连接");
+    return;
+  }
+  const profile = profileById(session.profile_id);
+  if (!profile) {
+    showToast("原 Connection Profile 已不存在，无法原地重连");
+    return;
+  }
+  state.lastAuthPromptSessionId = "";
+  await beginProfileConnection(profile, session.id);
+}
+
+async function disconnectRuntimeSession(session) {
+  if (!session || session.history_only || !sessionIsActive(session)) return;
+  try {
+    await DisconnectSession(session.id);
+    showToast("SSH 已断开，标签保留");
+  } catch (error) {
+    showToast("断开失败：" + error);
+  }
+}
+
+function clearSessionTerminalDisplay(session) {
+  if (!session) return;
+  const paneId = activePaneId(session.id);
+  terminalFor(session.id, paneId).clearDisplay();
+  if (session.id === state.activeSessionId) renderTerminal();
+  showToast(paneId ? "已清空 shell · 2 的本地显示" : "已清空 shell · 1 的本地显示");
+}
+
+async function exportSessionTerminalText(session) {
+  if (!session) return;
+  const paneId = activePaneId(session.id);
+  const terminal = terminalFor(session.id, paneId);
+  const content = terminal.render().replace(/\n+$/g, "") + "\n";
+  const suffix = paneId ? "-shell-2" : "-shell-1";
+  try {
+    const path = await ExportTerminalText(sessionTabName(session) + suffix, content);
+    if (path) showToast("终端文本已导出");
+  } catch (error) {
+    showToast("导出终端文本失败：" + error);
   }
 }
 
@@ -2824,28 +2899,33 @@ function decodeOutput(encoded, sessionId, paneId = "") {
   return decoderForSession(sessionId, paneId).decode(bytes, { stream: true });
 }
 
-async function beginProfileConnection(profile) {
+async function beginProfileConnection(profile, reconnectSessionId = "") {
+  const connectNow = reconnectSessionId
+    ? (credentials, rememberPassword) => reconnectProfileNow(profile, reconnectSessionId, credentials, rememberPassword)
+    : (credentials, rememberPassword) => connectProfileNow(profile, credentials, rememberPassword);
+
   if (profile.auth.mode === "password") {
     if (profile.auth.credential_ref) {
-      const started = await connectProfileNow(profile, { password: "", passphrase: "" }, false);
+      const started = await connectNow({ password: "", passphrase: "" }, false);
       if (!started && !$("#credentialsDialog").open) {
-        openCredentialsDialog(profile, "读取已保存密码失败，请重新输入。");
+        openCredentialsDialog(profile, "读取已保存密码失败，请重新输入。", reconnectSessionId);
       }
       return;
     }
-    openCredentialsDialog(profile);
+    openCredentialsDialog(profile, "", reconnectSessionId);
     return;
   }
   if (profile.auth.mode === "private_key") {
-    openCredentialsDialog(profile);
+    openCredentialsDialog(profile, "", reconnectSessionId);
     return;
   }
-  await connectProfileNow(profile, { password: "", passphrase: "" }, false);
+  await connectNow({ password: "", passphrase: "" }, false);
 }
 
-function openCredentialsDialog(profile, errorMessage = "") {
+function openCredentialsDialog(profile, errorMessage = "", reconnectSessionId = "") {
   state.pendingProfile = profile;
-  $("#credentialsTitle").textContent = "连接 " + profile.name;
+  state.pendingReconnectSessionId = reconnectSessionId;
+  $("#credentialsTitle").textContent = (reconnectSessionId ? "重新连接 " : "连接 ") + profile.name;
   $("#credentialsHint").textContent = "本次认证信息只保存在内存中。按 Enter 可直接连接。";
   const passwordMode = profile.auth.mode === "password";
   $("#passwordField").classList.toggle("is-hidden", !passwordMode);
@@ -2890,6 +2970,35 @@ async function connectProfileNow(profile, credentials, rememberPassword = false)
     errorBox.textContent = String(error);
     errorBox.classList.remove("is-hidden");
     hint.textContent = "连接尚未开始，请检查配置后重试。";
+    return false;
+  } finally {
+    button.disabled = false;
+    button.textContent = "连接";
+  }
+}
+
+async function reconnectProfileNow(profile, sessionId, credentials, rememberPassword = false) {
+  const dialog = $("#credentialsDialog");
+  const button = $("#credentialsConnectButton");
+  const hint = $("#credentialsHint");
+  const errorBox = $("#credentialsError");
+
+  button.disabled = true;
+  button.textContent = "重连中…";
+  hint.textContent = "正在为当前标签重新建立 SSH transport 与 PTY。";
+  errorBox.classList.add("is-hidden");
+
+  try {
+    const session = await ReconnectProfileSession(sessionId, credentials, rememberPassword);
+    updateSession(session);
+    state.activeSessionId = session.id;
+    renderAll();
+    if (dialog.open) dialog.close();
+    return true;
+  } catch (error) {
+    errorBox.textContent = String(error);
+    errorBox.classList.remove("is-hidden");
+    hint.textContent = "重新连接尚未开始，请检查认证信息后重试。";
     return false;
   } finally {
     button.disabled = false;
@@ -4122,17 +4231,28 @@ function bindEvents() {
     event.preventDefault();
     if (!state.pendingProfile) return;
     const profile = state.pendingProfile;
+    const reconnectSessionId = state.pendingReconnectSessionId;
     const credentials = { password: $("#connectPassword").value, passphrase: $("#connectPassphrase").value };
     const rememberPassword = profile.auth.mode === "password" && $("#rememberPassword").checked;
-    const started = await connectProfileNow(profile, credentials, rememberPassword);
-    if (started) state.pendingProfile = null;
+    const started = reconnectSessionId
+      ? await reconnectProfileNow(profile, reconnectSessionId, credentials, rememberPassword)
+      : await connectProfileNow(profile, credentials, rememberPassword);
+    if (started) {
+      state.pendingProfile = null;
+      state.pendingReconnectSessionId = "";
+    }
   });
   const closeCredentials = () => {
     state.pendingProfile = null;
+    state.pendingReconnectSessionId = "";
     if ($("#credentialsDialog").open) $("#credentialsDialog").close();
   };
   $("#credentialsCloseButton").addEventListener("click", closeCredentials);
   $("#credentialsCancelButton").addEventListener("click", closeCredentials);
+  $("#credentialsDialog").addEventListener("close", () => {
+    state.pendingProfile = null;
+    state.pendingReconnectSessionId = "";
+  });
 
   $("#quickAuthMode").addEventListener("change", updateQuickAuthFields);
   $("#quickStartButton").addEventListener("click", startQuickConnect);
@@ -4153,14 +4273,12 @@ function bindEvents() {
 
   $("#disconnectSessionButton").addEventListener("click", async () => {
     const session = activeSession();
-    if (!session) return;
-    try { await DisconnectSession(session.id); } catch (error) { showToast(String(error)); }
+    if (session) await disconnectRuntimeSession(session);
   });
 
   $("#retrySessionButton").addEventListener("click", async () => {
     const session = activeSession();
-    if (!session) return;
-    try { await RetrySession(session.id); } catch (error) { showToast(String(error)); }
+    if (session) await reconnectRuntimeSession(session);
   });
 
   $("#splitSessionButton").addEventListener("click", openSplitPane);
@@ -4403,6 +4521,10 @@ function bindEvents() {
       if (action === "rename") openSessionRenameDialog(session);
       if (action === "pin") toggleSessionPin(session);
       if (action === "clone") await cloneRuntimeSession(session);
+      if (action === "reconnect") await reconnectRuntimeSession(session);
+      if (action === "disconnect") await disconnectRuntimeSession(session);
+      if (action === "clear-terminal") clearSessionTerminalDisplay(session);
+      if (action === "export-terminal") await exportSessionTerminalText(session);
       if (action === "close") await closeSession(session.id);
       if (action === "close-others") await closeOtherSessions(session);
       if (action === "close-right") await closeSessionsToRight(session);

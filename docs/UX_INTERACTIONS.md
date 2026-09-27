@@ -124,7 +124,9 @@
 - Reconnect
 - Disconnect and keep tab
 
-“清空终端显示”只影响显示缓冲，不代表清除服务器历史。
+当前 Desktop 已在 Session Tab 右键菜单提供以上操作。导出针对当前聚焦 Pane，必须由用户通过保存对话框选择目标路径；不会自动写固定目录。清空终端只清当前 Pane 的本地 screen cells，保留 scrollback、终端模式和远端状态，不发送 Ctrl+L 或其他远端输入。
+
+Reconnect 对 Profile Session 复用原 Session ID，只替换 SSH transport / PTY，因此标签 Rename、Pin 和主 Pane scrollback 保留；使用当前 Profile 配置和正常凭据流程重新认证。临时 Quick Connect 在断开后不复用已经清除的 Password / Passphrase，需重新使用快速连接。自动重连中的 Session 使用“立即重试”而不是另起连接。
 
 ## 8. 拆分终端
 

@@ -661,15 +661,23 @@ func (a *App) QuickConnect(req QuickConnectRequest) (sshclient.SessionSnapshot, 
 	return a.connectProfile(profile, sshclient.Credentials{Password: req.Password, Passphrase: req.Passphrase})
 }
 
-func (a *App) connectProfile(profile model.ConnectionProfile, credentials sshclient.Credentials) (sshclient.SessionSnapshot, error) {
+func profileConnectConfig(profile model.ConnectionProfile, credentials sshclient.Credentials) (sshclient.ConnectConfig, error) {
 	if profile.Network.Mode != "direct" {
-		return sshclient.SessionSnapshot{}, fmt.Errorf("%s 网络模式将在后续阶段接入；当前 Runtime 只允许 Direct", profile.Network.Mode)
+		return sshclient.ConnectConfig{}, fmt.Errorf("%s 网络模式将在后续阶段接入；当前 Runtime 只允许 Direct", profile.Network.Mode)
 	}
-	return a.sessions.Connect(sshclient.ConnectConfig{
+	return sshclient.ConnectConfig{
 		ProfileID: profile.ID, Name: profile.Name, Host: profile.Host, Port: profile.Port, Username: profile.Username,
 		Auth: profile.Auth, Terminal: profile.Terminal, Reconnect: profile.Reconnect,
 		TimeoutSec: profile.Network.TimeoutSec, KeepaliveSec: profile.Network.KeepaliveSec, Credentials: credentials,
-	})
+	}, nil
+}
+
+func (a *App) connectProfile(profile model.ConnectionProfile, credentials sshclient.Credentials) (sshclient.SessionSnapshot, error) {
+	cfg, err := profileConnectConfig(profile, credentials)
+	if err != nil {
+		return sshclient.SessionSnapshot{}, err
+	}
+	return a.sessions.Connect(cfg)
 }
 
 func (a *App) WriteSession(id, data string) error { return a.sessions.Write(id, data) }
@@ -691,11 +699,133 @@ func (a *App) ClosePane(sessionID, paneID string) error {
 func (a *App) CloneSession(id string) (sshclient.SessionSnapshot, error) {
 	return a.sessions.CloneSession(id)
 }
+
+func (a *App) ReconnectProfileSession(id string, credentials sshclient.Credentials, rememberPassword bool) (sshclient.SessionSnapshot, error) {
+	var profileID string
+	for _, session := range a.sessions.Sessions() {
+		if session.ID == id {
+			profileID = session.ProfileID
+			break
+		}
+	}
+	if profileID == "" {
+		return sshclient.SessionSnapshot{}, errors.New("临时快速连接不能复用已清除的认证信息，请重新使用快速连接")
+	}
+
+	settings, err := a.store.Load()
+	if err != nil {
+		return sshclient.SessionSnapshot{}, err
+	}
+	profile, err := findProfile(settings, profileID)
+	if err != nil {
+		return sshclient.SessionSnapshot{}, err
+	}
+
+	providedPassword := credentials.Password != ""
+	if profile.Auth.Mode == "password" && credentials.Password == "" && profile.Auth.CredentialRef != "" {
+		saved, err := a.secure.Get(profile.Auth.CredentialRef)
+		if err != nil {
+			return sshclient.SessionSnapshot{}, fmt.Errorf("读取已保存密码失败，请重新输入：%w", err)
+		}
+		credentials.Password = string(saved)
+	}
+
+	cfg, err := profileConnectConfig(profile, credentials)
+	if err != nil {
+		return sshclient.SessionSnapshot{}, err
+	}
+	session, err := a.sessions.ReconnectSession(id, cfg)
+	if err != nil {
+		return sshclient.SessionSnapshot{}, err
+	}
+
+	if profile.Auth.Mode == "password" && providedPassword {
+		a.credentialMu.Lock()
+		a.pendingCredential[session.ID] = pendingCredentialAction{
+			ProfileID:   profile.ID,
+			Password:    credentials.Password,
+			Remember:    rememberPassword,
+			ExistingRef: profile.Auth.CredentialRef,
+		}
+		a.credentialMu.Unlock()
+
+		for _, current := range a.sessions.Sessions() {
+			if current.ID == session.ID && (current.State == "connected" || current.State == "failed" ||
+				current.State == "security_blocked" || current.State == "disconnected") {
+				a.handleCredentialState(current)
+				break
+			}
+		}
+	}
+	return session, nil
+}
+
 func (a *App) RetrySession(id string) error           { return a.sessions.RetryNow(id) }
 func (a *App) DisconnectSession(id string) error      { return a.sessions.Disconnect(id) }
 func (a *App) CloseSession(id string) error           { return a.sessions.CloseSession(id) }
 func (a *App) ResolveHostKey(id, action string) error { return a.sessions.ResolveHostKey(id, action) }
 func (a *App) DisconnectAll()                         { a.sessions.CloseAll() }
+
+func terminalExportFilename(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "ssh-terminal"
+	}
+	var builder strings.Builder
+	for _, r := range name {
+		if r < 32 || strings.ContainsRune(`<>:"/\\|?*`, r) {
+			builder.WriteRune('_')
+			continue
+		}
+		builder.WriteRune(r)
+	}
+	name = strings.Trim(builder.String(), " .")
+	if name == "" {
+		name = "ssh-terminal"
+	}
+	runes := []rune(name)
+	if len(runes) > 80 {
+		name = string(runes[:80])
+	}
+	if !strings.HasSuffix(strings.ToLower(name), ".txt") {
+		name += ".txt"
+	}
+	return name
+}
+
+func (a *App) ExportTerminalText(defaultName, content string) (string, error) {
+	const maxExportBytes = 32 * 1024 * 1024
+	if len(content) > maxExportBytes {
+		return "", fmt.Errorf("终端文本超过 %d MiB，无法直接导出", maxExportBytes/(1024*1024))
+	}
+
+	a.mu.RLock()
+	controller := a.controller
+	a.mu.RUnlock()
+	if controller == nil {
+		return "", errors.New("桌面运行时尚未就绪")
+	}
+
+	path, err := wailsruntime.SaveFileDialog(controller.Context(), wailsruntime.SaveDialogOptions{
+		Title:           "导出终端文本",
+		DefaultFilename: terminalExportFilename(defaultName),
+		Filters: []wailsruntime.FileFilter{
+			{DisplayName: "Text files", Pattern: "*.txt"},
+			{DisplayName: "All files", Pattern: "*"},
+		},
+		CanCreateDirectories: true,
+	})
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return "", nil
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return "", fmt.Errorf("写入终端文本失败: %w", err)
+	}
+	return path, nil
+}
 
 func (a *App) ChoosePrivateKey() (string, error) {
 	a.mu.RLock()

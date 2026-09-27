@@ -185,6 +185,11 @@
 - Rename 只改变当前 Session 的 UI 标签名称，不修改 Connection Profile，也不跨应用重启持久化；标签别名应同步显示在标签栏、当前会话标题、会话侧栏和 Ctrl+K 搜索中。
 - Pin 只作用于当前运行时；固定标签排列在左侧并保持固定组内原相对顺序，取消固定后回到普通标签组。`关闭右侧` 必须以 Pin 后的视觉顺序为准。
 - 关闭重命名过的真实 Session 时，“最近关闭”记录保留关闭时的标签别名；关闭后清理该 Session 的 Rename / Pin 运行时状态。
+- Session 右键菜单提供“重新连接 / 断开并保留标签 / 清空当前终端显示 / 导出当前终端文本”。活动 Session 的重新连接禁用，结束态 Profile Session 才允许原地 Reconnect；自动重连态则触发 RetryNow。
+- Profile Session 原地 Reconnect 必须复用相同 Session ID，旧 managedSession 先标记关闭并抑制晚到状态，新实例使用当前 Profile 配置重新建立 transport/PTY；Rename、Pin 和主 Pane scrollback 不得丢失。
+- Quick Connect 断开后不得复用已清除的 Password / Passphrase；无 Profile 的结束态 Session 不允许无凭据原地重连。
+- “清空当前终端显示”只清本地当前 Pane screen，不发送任何远端输入，不清 scrollback，不重置终端 mode/cursor 状态。
+- “导出当前终端文本”导出当前聚焦 Pane 的 visible + scrollback 纯文本，并通过系统 Save Dialog 由用户选择路径；取消保存不报错，单次导出上限 32 MiB。
 - 克隆活动 Session 必须创建新的 SSH Session/transport，使用原 Session 的运行时连接配置；新旧 Session ID 不同，关闭克隆 Session 不得影响原 Session。
 - `history_only` 或已经结束的 Session 不允许直接 Clone Runtime Session。
 - “关闭其他 / 关闭右侧”涉及多个活动 Session 时只确认一次；每个真实 Session 仍分别进入最近关闭历史。

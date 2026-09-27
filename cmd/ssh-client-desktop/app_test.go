@@ -256,6 +256,21 @@ func TestDuplicateProfileNameAvoidsCollisions(t *testing.T) {
 	}
 }
 
+func TestTerminalExportFilename(t *testing.T) {
+	cases := map[string]string{
+		"":                    "ssh-terminal.txt",
+		"prod":                "prod.txt",
+		"prod.txt":            "prod.txt",
+		"prod:root/console*1": "prod_root_console_1.txt",
+		"  .  ":               "ssh-terminal.txt",
+	}
+	for input, want := range cases {
+		if got := terminalExportFilename(input); got != want {
+			t.Fatalf("terminalExportFilename(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestNormalizeProfileTerminalSettings(t *testing.T) {
 	profile := model.DefaultProfile()
 	profile.Terminal.FontSize = 48

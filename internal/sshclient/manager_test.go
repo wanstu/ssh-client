@@ -1,6 +1,7 @@
 package sshclient
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -195,6 +196,58 @@ func TestManagerCloneSessionCreatesIndependentConnection(t *testing.T) {
 		case <-deadline:
 			t.Fatal("original session did not produce output after clone was closed")
 		}
+	}
+}
+
+func TestManagerReconnectSessionReusesSessionID(t *testing.T) {
+	manager := NewManager(t.TempDir(), func(string, any) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	old := &managedSession{
+		cfg: ConnectConfig{
+			ProfileID:  "profile_reconnect",
+			Name:       "old",
+			Host:       "127.0.0.1",
+			Port:       22,
+			Username:   "tester",
+			Auth:       model.AuthConfig{Mode: "password"},
+			Terminal:   model.DefaultProfile().Terminal,
+			TimeoutSec: 1,
+		},
+		ctx:      ctx,
+		cancel:   cancel,
+		panes:    map[string]*managedPane{},
+		retryNow: make(chan struct{}, 1),
+		snapshot: SessionSnapshot{
+			ID:    "session_reconnect",
+			State: "disconnected",
+		},
+	}
+	manager.sessions[old.snapshot.ID] = old
+
+	cfg := old.cfg
+	cfg.Name = "updated"
+	cfg.Credentials = Credentials{Password: "secret"}
+	next, err := manager.ReconnectSession(old.snapshot.ID, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Disconnect(next.ID)
+
+	if next.ID != old.snapshot.ID {
+		t.Fatalf("reconnect ID = %q, want %q", next.ID, old.snapshot.ID)
+	}
+	if next.State != "connecting" || next.Name != "updated" {
+		t.Fatalf("unexpected reconnect snapshot: %#v", next)
+	}
+	if !old.closed {
+		t.Fatal("old managed session was not closed before replacement")
+	}
+	current, err := manager.session(next.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current == old {
+		t.Fatal("reconnect did not replace the managed session instance")
 	}
 }
 

@@ -336,6 +336,87 @@ func (m *Manager) Disconnect(sessionID string) error {
 	return nil
 }
 
+func (m *Manager) ReconnectSession(sessionID string, cfg ConnectConfig) (SessionSnapshot, error) {
+	old, err := m.session(sessionID)
+	if err != nil {
+		return SessionSnapshot{}, err
+	}
+
+	cfg.Name = strings.TrimSpace(cfg.Name)
+	cfg.Host = strings.TrimSpace(cfg.Host)
+	cfg.Username = strings.TrimSpace(cfg.Username)
+	if cfg.Host == "" || cfg.Username == "" {
+		return SessionSnapshot{}, errors.New("host and username are required")
+	}
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		return SessionSnapshot{}, errors.New("port must be between 1 and 65535")
+	}
+	if cfg.TimeoutSec <= 0 {
+		cfg.TimeoutSec = 10
+	}
+	if cfg.Terminal.Term == "" {
+		cfg.Terminal.Term = "xterm-256color"
+	}
+	if strings.TrimSpace(cfg.Terminal.Encoding) == "" {
+		cfg.Terminal.Encoding = "UTF-8"
+	}
+	if cfg.Name == "" {
+		cfg.Name = cfg.Host
+	}
+
+	old.mu.Lock()
+	state := old.snapshot.State
+	if old.closed {
+		old.mu.Unlock()
+		return SessionSnapshot{}, fmt.Errorf("session %q is closed and cannot reconnect", sessionID)
+	}
+	switch state {
+	case "disconnected", "failed", "security_blocked":
+	default:
+		old.mu.Unlock()
+		return SessionSnapshot{}, fmt.Errorf("session %q is %s and cannot reconnect", sessionID, state)
+	}
+	old.closed = true
+	cancel := old.cancel
+	shell, client := old.shell, old.client
+	old.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	m.closeAllPanes(old)
+	if shell != nil {
+		_ = shell.Close()
+	}
+	if client != nil {
+		_ = client.Close()
+	}
+
+	ctx, nextCancel := context.WithCancel(context.Background())
+	now := time.Now()
+	replacement := &managedSession{
+		cfg: cfg, ctx: ctx, cancel: nextCancel, panes: map[string]*managedPane{}, retryNow: make(chan struct{}, 1),
+		snapshot: SessionSnapshot{
+			ID: sessionID, ProfileID: cfg.ProfileID, Name: cfg.Name,
+			Target: net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port)),
+			State:  "connecting", Stage: "tcp_connect", Message: "正在重新建立网络连接", StartedAtUnixMs: now.UnixMilli(),
+		},
+	}
+
+	m.mu.Lock()
+	if current := m.sessions[sessionID]; current != old {
+		m.mu.Unlock()
+		nextCancel()
+		return SessionSnapshot{}, fmt.Errorf("session %q changed while reconnecting", sessionID)
+	}
+	m.sessions[sessionID] = replacement
+	m.mu.Unlock()
+
+	m.emitState(replacement)
+	go m.run(replacement)
+	return replacement.copySnapshot(), nil
+}
+
 func (m *Manager) CloneSession(sessionID string) (SessionSnapshot, error) {
 	ms, err := m.session(sessionID)
 	if err != nil {
