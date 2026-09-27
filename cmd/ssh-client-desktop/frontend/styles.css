@@ -598,6 +598,17 @@ button, input, select {
   background: var(--dk-bg-subtle);
 }
 
+.session-tab.is-pinned {
+  grid-template-columns: 7px 7px minmax(0, 1fr) auto;
+}
+
+.session-tab-pin {
+  color: var(--dk-primary);
+  font-size: 14px;
+  line-height: 1;
+  text-align: center;
+}
+
 .session-tab.is-active {
   border-color: color-mix(in srgb, var(--dk-border) 55%, transparent);
   border-bottom-color: transparent;

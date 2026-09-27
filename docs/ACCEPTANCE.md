@@ -181,7 +181,10 @@
 - 切换不丢终端内容。
 - 活动 Session 关闭默认确认。
 - Disconnected 历史标签可直接关闭。
-- 标签右键菜单提供“克隆会话 / 关闭 / 关闭其他 / 关闭右侧”；没有右侧标签时“关闭右侧”禁用。
+- 标签右键菜单提供“重命名标签 / 固定或取消固定 / 克隆会话 / 关闭 / 关闭其他 / 关闭右侧”；没有右侧标签时“关闭右侧”禁用。
+- Rename 只改变当前 Session 的 UI 标签名称，不修改 Connection Profile，也不跨应用重启持久化；标签别名应同步显示在标签栏、当前会话标题、会话侧栏和 Ctrl+K 搜索中。
+- Pin 只作用于当前运行时；固定标签排列在左侧并保持固定组内原相对顺序，取消固定后回到普通标签组。`关闭右侧` 必须以 Pin 后的视觉顺序为准。
+- 关闭重命名过的真实 Session 时，“最近关闭”记录保留关闭时的标签别名；关闭后清理该 Session 的 Rename / Pin 运行时状态。
 - 克隆活动 Session 必须创建新的 SSH Session/transport，使用原 Session 的运行时连接配置；新旧 Session ID 不同，关闭克隆 Session 不得影响原 Session。
 - `history_only` 或已经结束的 Session 不允许直接 Clone Runtime Session。
 - “关闭其他 / 关闭右侧”涉及多个活动 Session 时只确认一次；每个真实 Session 仍分别进入最近关闭历史。

@@ -70,6 +70,9 @@ const state = {
   terminalContextSelection: "",
   profileContextId: "",
   sessionContextId: "",
+  sessionRenameId: "",
+  sessionTabNames: new Map(),
+  pinnedSessionIds: new Set(),
   history: [],
   commandHistory: [],
   promptPrefixes: new Map()
@@ -1108,12 +1111,12 @@ function formatHistoryTime(value) {
   }).format(date);
 }
 
-function rememberClosedSession(session, terminalText) {
+function rememberClosedSession(session, terminalText, displayName = "") {
   const record = {
     history_id: String(session.id) + "-" + Date.now(),
     original_session_id: String(session.id),
     profile_id: session.profile_id || "",
-    name: session.name || "SSH 会话",
+    name: displayName || sessionTabName(session) || "SSH 会话",
     target: session.target || "",
     closed_at: Date.now(),
     terminal_text: String(terminalText || "").slice(-SESSION_HISTORY_TEXT_LIMIT)
@@ -1448,6 +1451,98 @@ function showProfileContextMenu(event, profile) {
   positionContextMenu(menu, event);
 }
 
+function sessionTabName(session) {
+  if (!session) return "";
+  return state.sessionTabNames.get(session.id) || session.name || "SSH 会话";
+}
+
+function orderedSessions() {
+  const pinned = [];
+  const normal = [];
+  for (const session of state.sessions) {
+    if (state.pinnedSessionIds.has(session.id)) pinned.push(session);
+    else normal.push(session);
+  }
+  return [...pinned, ...normal];
+}
+
+function fallbackSessionId() {
+  const ordered = orderedSessions();
+  return ordered.length ? ordered[ordered.length - 1].id : "";
+}
+
+function pruneSessionTabState() {
+  const valid = new Set(state.sessions.map((session) => session.id));
+  for (const id of [...state.sessionTabNames.keys()]) {
+    if (!valid.has(id)) state.sessionTabNames.delete(id);
+  }
+  for (const id of [...state.pinnedSessionIds]) {
+    if (!valid.has(id)) state.pinnedSessionIds.delete(id);
+  }
+  if (state.sessionRenameId && !valid.has(state.sessionRenameId)) closeSessionRenameDialog();
+}
+
+function dropSessionTabState(sessionId) {
+  state.sessionTabNames.delete(sessionId);
+  state.pinnedSessionIds.delete(sessionId);
+  if (state.sessionRenameId === sessionId) closeSessionRenameDialog();
+}
+
+function openSessionRenameDialog(session) {
+  if (!session) return;
+  state.sessionRenameId = session.id;
+  $("#sessionRenameInput").value = sessionTabName(session);
+  $("#sessionRenameError").classList.add("is-hidden");
+  const dialog = $("#sessionRenameDialog");
+  if (!dialog.open) dialog.showModal();
+  window.setTimeout(() => {
+    $("#sessionRenameInput").focus();
+    $("#sessionRenameInput").select();
+  }, 0);
+}
+
+function closeSessionRenameDialog() {
+  state.sessionRenameId = "";
+  const dialog = $("#sessionRenameDialog");
+  if (dialog.open) dialog.close();
+}
+
+function saveSessionRename() {
+  const session = sessionById(state.sessionRenameId);
+  if (!session) {
+    closeSessionRenameDialog();
+    return;
+  }
+  const value = $("#sessionRenameInput").value.trim();
+  if (!value) {
+    const error = $("#sessionRenameError");
+    error.textContent = "标签名称不能为空";
+    error.classList.remove("is-hidden");
+    $("#sessionRenameInput").focus();
+    return;
+  }
+  if (value === session.name) state.sessionTabNames.delete(session.id);
+  else state.sessionTabNames.set(session.id, value);
+  closeSessionRenameDialog();
+  renderSessions();
+  renderActiveSession();
+  if (state.nav === "sessions") renderSidebar();
+  showToast("标签已重命名");
+}
+
+function toggleSessionPin(session) {
+  if (!session) return;
+  if (state.pinnedSessionIds.has(session.id)) {
+    state.pinnedSessionIds.delete(session.id);
+    showToast("已取消固定标签");
+  } else {
+    state.pinnedSessionIds.add(session.id);
+    showToast("标签已固定到左侧");
+  }
+  renderSessions();
+  if (state.nav === "sessions") renderSidebar();
+}
+
 function sessionById(sessionId) {
   return state.sessions.find((session) => session.id === sessionId) || null;
 }
@@ -1469,13 +1564,16 @@ function showSessionContextMenu(event, session) {
   const menu = $("#sessionContextMenu");
   state.sessionContextId = session.id;
 
-  const index = state.sessions.findIndex((item) => item.id === session.id);
+  const ordered = orderedSessions();
+  const index = ordered.findIndex((item) => item.id === session.id);
+  const pinLabel = menu.querySelector('[data-session-action="pin"] span');
   const clone = menu.querySelector('[data-session-action="clone"]');
   const closeOthers = menu.querySelector('[data-session-action="close-others"]');
   const closeRight = menu.querySelector('[data-session-action="close-right"]');
+  if (pinLabel) pinLabel.textContent = state.pinnedSessionIds.has(session.id) ? "取消固定" : "固定标签";
   if (clone) clone.disabled = !sessionCanClone(session);
-  if (closeOthers) closeOthers.disabled = state.sessions.length <= 1;
-  if (closeRight) closeRight.disabled = index < 0 || index >= state.sessions.length - 1;
+  if (closeOthers) closeOthers.disabled = ordered.length <= 1;
+  if (closeRight) closeRight.disabled = index < 0 || index >= ordered.length - 1;
 
   positionContextMenu(menu, event);
 }
@@ -1489,7 +1587,7 @@ async function cloneRuntimeSession(session) {
     const cloned = await CloneSession(session.id);
     updateSession(cloned);
     selectSession(cloned.id);
-    showToast("已克隆会话“" + session.name + "”");
+    showToast("已克隆会话“" + sessionTabName(session) + "”");
   } catch (error) {
     showToast("克隆会话失败：" + error);
   }
@@ -1502,7 +1600,7 @@ function sessionIsActive(session) {
 
 async function closeSessionSet(sessionIds, description) {
   const wanted = new Set(sessionIds);
-  const targets = state.sessions.filter((session) => wanted.has(session.id));
+  const targets = orderedSessions().filter((session) => wanted.has(session.id));
   if (!targets.length) return;
 
   const activeCount = targets.filter(sessionIsActive).length;
@@ -1536,9 +1634,10 @@ async function closeOtherSessions(session) {
 
 async function closeSessionsToRight(session) {
   if (!session) return;
-  const index = state.sessions.findIndex((item) => item.id === session.id);
-  if (index < 0 || index >= state.sessions.length - 1) return;
-  const ids = state.sessions.slice(index + 1).map((item) => item.id);
+  const ordered = orderedSessions();
+  const index = ordered.findIndex((item) => item.id === session.id);
+  if (index < 0 || index >= ordered.length - 1) return;
+  const ids = ordered.slice(index + 1).map((item) => item.id);
   await closeSessionSet(ids, "关闭右侧 " + ids.length + " 个标签");
 }
 
@@ -1599,14 +1698,15 @@ function buildCommandItems() {
     });
   }
 
-  for (const session of state.sessions) {
+  for (const session of orderedSessions()) {
+    const tabName = sessionTabName(session);
     items.push({
       kind: "会话",
       icon: "▤",
-      label: session.name,
+      label: tabName,
       detail: stateLabel(session.state) + " · " + session.target,
-      meta: "切换",
-      keywords: [session.name, session.target, session.state].join(" "),
+      meta: state.pinnedSessionIds.has(session.id) ? "固定" : "切换",
+      keywords: [tabName, session.name, session.target, session.state].join(" "),
       action: () => selectSession(session.id)
     });
   }
@@ -1856,6 +1956,7 @@ async function loadState() {
   const next = await GetState();
   state.settings = next.settings;
   state.sessions = next.sessions || [];
+  pruneSessionTabState();
   state.commandHistory = next.command_history || [];
   state.launchAtLogin = !!next.launch_at_login;
   state.launchAtLoginSupported = !!next.launch_at_login_supported;
@@ -2031,11 +2132,11 @@ function renderSessionSidebar(list) {
     header.className = "connection-group-title";
     header.innerHTML = "<span>当前会话</span><span>" + state.sessions.length + "</span>";
     section.append(header);
-    for (const session of state.sessions) {
+    for (const session of orderedSessions()) {
       const row = document.createElement("button");
       row.type = "button";
       row.className = "connection-row" + (session.id === state.activeSessionId ? " is-selected" : "");
-      row.title = session.name + "\n" + session.target + "\n" + stateLabel(session.state);
+      row.title = sessionTabName(session) + "\n" + session.target + "\n" + stateLabel(session.state);
       const avatar = document.createElement("span");
       avatar.className = "connection-avatar";
       avatar.textContent = ">_";
@@ -2043,7 +2144,7 @@ function renderSessionSidebar(list) {
       copy.className = "connection-content";
       const name = document.createElement("span");
       name.className = "connection-name";
-      name.textContent = session.name;
+      name.textContent = sessionTabName(session);
       const meta = document.createElement("span");
       meta.className = "connection-meta session-meta";
 
@@ -2264,28 +2365,43 @@ function renderHistorySidebar(list, records = state.commandHistory, query = "") 
 function renderSessions() {
   const tabs = $("#sessionTabs");
   tabs.replaceChildren();
+  pruneSessionTabState();
+  const ordered = orderedSessions();
   const totals = new Map();
   const seen = new Map();
-  for (const session of state.sessions) totals.set(session.name, (totals.get(session.name) || 0) + 1);
+  for (const session of ordered) {
+    const baseName = sessionTabName(session);
+    totals.set(baseName, (totals.get(baseName) || 0) + 1);
+  }
 
-  for (const session of state.sessions) {
-    const nth = (seen.get(session.name) || 0) + 1;
-    seen.set(session.name, nth);
-    const duplicate = (totals.get(session.name) || 0) > 1;
-    const displayName = session.name + (duplicate ? " · " + nth : "") +
+  for (const session of ordered) {
+    const baseName = sessionTabName(session);
+    const nth = (seen.get(baseName) || 0) + 1;
+    seen.set(baseName, nth);
+    const duplicate = (totals.get(baseName) || 0) > 1;
+    const displayName = baseName + (duplicate ? " · " + nth : "") +
       (session.state === "reconnecting" ? " · 重连中" : "");
+    const pinned = state.pinnedSessionIds.has(session.id);
 
     const tab = document.createElement("button");
     tab.type = "button";
-    tab.className = "session-tab" + (session.id === state.activeSessionId ? " is-active" : "");
+    tab.className = "session-tab" + (session.id === state.activeSessionId ? " is-active" : "") +
+      (pinned ? " is-pinned" : "");
     tab.setAttribute("role", "tab");
     tab.setAttribute("aria-selected", String(session.id === state.activeSessionId));
     tab.setAttribute("aria-label", "切换到会话 " + displayName);
-    tab.title = session.name + "\n" + (session.target || "") + "\n" + stateLabel(session.state);
+    tab.title = baseName + "\n" + (session.target || "") + "\n" + stateLabel(session.state) +
+      (pinned ? "\n已固定" : "");
 
     const dot = document.createElement("span");
     dot.className = "connection-status " + session.state;
     dot.setAttribute("aria-hidden", "true");
+
+    const pin = document.createElement("span");
+    pin.className = "session-tab-pin";
+    pin.textContent = "•";
+    pin.title = "固定标签";
+    pin.setAttribute("aria-hidden", "true");
 
     const title = document.createElement("span");
     title.className = "session-tab-title";
@@ -2302,7 +2418,8 @@ function renderSessions() {
       await closeSession(session.id);
     });
 
-    tab.append(dot, title, close);
+    if (pinned) tab.append(dot, pin, title, close);
+    else tab.append(dot, title, close);
     tab.addEventListener("click", () => selectSession(session.id));
     tab.addEventListener("contextmenu", (event) => {
       event.preventDefault();
@@ -2331,7 +2448,7 @@ function renderActiveSession() {
   $("#sessionView").classList.toggle("is-hidden", !session);
   if (!session) return;
 
-  $("#activeSessionName").textContent = session.name;
+  $("#activeSessionName").textContent = sessionTabName(session);
   $("#activeSessionTarget").textContent = session.target;
   $("#terminalStateText").textContent = session.stage || session.state;
 
@@ -3276,8 +3393,9 @@ async function closeSession(id, options = {}) {
   if (session.history_only) {
     state.sessions = state.sessions.filter((item) => item.id !== id);
     state.terminals.delete(id);
+    dropSessionTabState(id);
     if (state.activeSessionId === id) {
-      state.activeSessionId = state.sessions.length ? state.sessions[state.sessions.length - 1].id : "";
+      state.activeSessionId = fallbackSessionId();
     }
     if (shouldRender) renderAll();
     return true;
@@ -3289,13 +3407,15 @@ async function closeSession(id, options = {}) {
   }
 
   const terminalText = terminalFor(id).render(false);
+  const displayName = sessionTabName(session);
   try {
     await CloseSession(id);
-    rememberClosedSession(session, terminalText);
+    rememberClosedSession(session, terminalText, displayName);
     state.sessions = state.sessions.filter((item) => item.id !== id);
     state.terminals.delete(id);
+    dropSessionTabState(id);
     if (state.activeSessionId === id) {
-      state.activeSessionId = state.sessions.length ? state.sessions[state.sessions.length - 1].id : "";
+      state.activeSessionId = fallbackSessionId();
     }
     if (shouldRender) renderAll();
     return true;
@@ -3860,6 +3980,7 @@ function bindEvents() {
   EventsOn("ssh:host-key", (challenge) => showHostKeyChallenge(challenge));
   EventsOn("ssh:session-closed", (payload) => {
     state.sessions = state.sessions.filter((session) => session.id !== payload.session_id);
+    dropSessionTabState(payload.session_id);
     const split = splitPaneForSession(payload.session_id);
     if (split) {
       const splitKey = terminalRuntimeKey(payload.session_id, split.id);
@@ -3874,7 +3995,7 @@ function bindEvents() {
     state.decoders.delete(payload.session_id);
     state.promptPrefixes.delete(payload.session_id);
     if (state.activeSessionId === payload.session_id) {
-      state.activeSessionId = state.sessions.length ? state.sessions[state.sessions.length - 1].id : "";
+      state.activeSessionId = fallbackSessionId();
     }
     if (sessionBatchCloseDepth === 0) renderAll();
   });
@@ -3923,6 +4044,16 @@ function bindEvents() {
   $("#connectionSearch").addEventListener("input", (event) => {
     state.search = event.target.value;
     renderSidebar();
+  });
+
+  $("#sessionRenameForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveSessionRename();
+  });
+  $("#sessionRenameCloseButton").addEventListener("click", closeSessionRenameDialog);
+  $("#sessionRenameCancelButton").addEventListener("click", closeSessionRenameDialog);
+  $("#sessionRenameDialog").addEventListener("close", () => {
+    state.sessionRenameId = "";
   });
 
   $("#profileAuthMode").addEventListener("change", updatePrivateKeyVisibility);
@@ -4269,6 +4400,8 @@ function bindEvents() {
       const action = button.dataset.sessionAction;
       hideSessionContextMenu();
       if (!session) return;
+      if (action === "rename") openSessionRenameDialog(session);
+      if (action === "pin") toggleSessionPin(session);
       if (action === "clone") await cloneRuntimeSession(session);
       if (action === "close") await closeSession(session.id);
       if (action === "close-others") await closeOtherSessions(session);
