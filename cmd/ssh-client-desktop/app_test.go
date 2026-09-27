@@ -242,6 +242,20 @@ func TestCredentialClearedAfterSuccessfulOptOut(t *testing.T) {
 	}
 }
 
+func TestDuplicateProfileNameAvoidsCollisions(t *testing.T) {
+	profiles := []model.ConnectionProfile{
+		{Name: "prod"},
+		{Name: "prod 副本"},
+		{Name: "PROD 副本 2"},
+	}
+	if got := duplicateProfileName(profiles, "prod"); got != "prod 副本 3" {
+		t.Fatalf("duplicateProfileName() = %q, want %q", got, "prod 副本 3")
+	}
+	if got := duplicateProfileName(profiles, "staging"); got != "staging 副本" {
+		t.Fatalf("duplicateProfileName() = %q, want %q", got, "staging 副本")
+	}
+}
+
 func TestNormalizeProfileTerminalSettings(t *testing.T) {
 	profile := model.DefaultProfile()
 	profile.Terminal.FontSize = 48

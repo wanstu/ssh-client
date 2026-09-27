@@ -472,10 +472,28 @@ func (a *App) DuplicateProfile(id string) (UIState, error) {
 		return UIState{}, err
 	}
 	profile.ID = ""
-	profile.Name += " 副本"
+	profile.Name = duplicateProfileName(settings.Profiles, profile.Name)
 	profile.Auth.CredentialRef = ""
 	profile.Source = model.SourceInfo{Kind: "manual"}
 	return a.CreateProfile(profile)
+}
+
+func duplicateProfileName(profiles []model.ConnectionProfile, original string) string {
+	base := strings.TrimSpace(original) + " 副本"
+	candidate := base
+	for index := 2; ; index++ {
+		taken := false
+		for _, profile := range profiles {
+			if strings.EqualFold(strings.TrimSpace(profile.Name), candidate) {
+				taken = true
+				break
+			}
+		}
+		if !taken {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s %d", base, index)
+	}
 }
 
 func (a *App) DeleteProfile(id string) (UIState, error) {

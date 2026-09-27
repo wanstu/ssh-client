@@ -7,6 +7,7 @@ import {
   DeleteGroup,
   CreateProfile,
   UpdateProfile,
+  DuplicateProfile,
   DeleteProfile,
   ClearSavedCredential,
   ConnectProfile,
@@ -66,6 +67,7 @@ const state = {
   search: "",
   sidebarCollapsed: false,
   terminalContextSelection: "",
+  profileContextId: "",
   history: [],
   commandHistory: [],
   promptPrefixes: new Map()
@@ -1372,6 +1374,81 @@ function showTerminalContextMenu(event, paneId = activePaneId()) {
   menu.style.top = top + "px";
 }
 
+function profileById(profileId) {
+  return (state.settings.profiles || []).find((profile) => profile.id === profileId) || null;
+}
+
+function hideProfileContextMenu() {
+  const menu = $("#profileContextMenu");
+  if (menu) menu.classList.add("is-hidden");
+  state.profileContextId = "";
+}
+
+function positionContextMenu(menu, event) {
+  menu.classList.remove("is-hidden");
+  const width = menu.offsetWidth;
+  const height = menu.offsetHeight;
+  const left = Math.min(event.clientX, Math.max(8, window.innerWidth - width - 8));
+  const top = Math.min(event.clientY, Math.max(8, window.innerHeight - height - 8));
+  menu.style.left = left + "px";
+  menu.style.top = top + "px";
+}
+
+function showProfileContextMenu(event, profile) {
+  hideTerminalContextMenu();
+  const menu = $("#profileContextMenu");
+  state.profileContextId = profile.id;
+  state.selectedProfileId = profile.id;
+  document.querySelectorAll(".connection-row").forEach((row) => {
+    row.classList.toggle("is-selected", row.dataset.profileId === profile.id);
+  });
+  const favoriteLabel = menu.querySelector('[data-profile-action="favorite"] span');
+  if (favoriteLabel) favoriteLabel.textContent = profile.favorite ? "取消收藏" : "收藏";
+  positionContextMenu(menu, event);
+}
+
+async function duplicateConnectionProfile(profile) {
+  if (!profile) return;
+  const before = new Set((state.settings.profiles || []).map((item) => item.id));
+  try {
+    const next = await DuplicateProfile(profile.id);
+    state.settings = next.settings;
+    const created = (state.settings.profiles || []).find((item) => !before.has(item.id));
+    state.selectedProfileId = created ? created.id : "";
+    renderSidebar();
+    showToast(created ? "已复制为“" + created.name + "”" : "连接已复制");
+  } catch (error) {
+    showToast(String(error));
+  }
+}
+
+async function toggleProfileFavorite(profile) {
+  if (!profile) return;
+  try {
+    const next = await UpdateProfile({ ...profile, favorite: !profile.favorite });
+    state.settings = next.settings;
+    state.selectedProfileId = profile.id;
+    renderSidebar();
+    showToast(profile.favorite ? "已取消收藏" : "已加入收藏");
+  } catch (error) {
+    showToast(String(error));
+  }
+}
+
+async function deleteConnectionProfile(profile) {
+  if (!profile) return;
+  if (!window.confirm("删除连接“" + profile.name + "”？活动 Session 不会被强制关闭。")) return;
+  try {
+    const next = await DeleteProfile(profile.id);
+    state.settings = next.settings;
+    if (state.selectedProfileId === profile.id) state.selectedProfileId = "";
+    renderSidebar();
+    showToast("连接已删除");
+  } catch (error) {
+    showToast(String(error));
+  }
+}
+
 function buildCommandItems() {
   const items = [];
 
@@ -1396,6 +1473,19 @@ function buildCommandItems() {
       meta: "切换",
       keywords: [session.name, session.target, session.state].join(" "),
       action: () => selectSession(session.id)
+    });
+  }
+
+  const selectedProfile = profileById(state.selectedProfileId);
+  if (selectedProfile) {
+    items.push({
+      kind: "操作",
+      icon: "⧉",
+      label: "复制选中连接",
+      detail: selectedProfile.name + " → 自动创建无凭据副本",
+      meta: "",
+      keywords: "duplicate copy clone 复制 连接 副本",
+      action: () => duplicateConnectionProfile(selectedProfile)
     });
   }
 
@@ -1772,7 +1862,7 @@ function createConnectionRow(profile) {
   row.addEventListener("dblclick", () => beginProfileConnection(profile));
   row.addEventListener("contextmenu", (event) => {
     event.preventDefault();
-    openProfileDialog(profile);
+    showProfileContextMenu(event, profile);
   });
   return row;
 }
@@ -3940,11 +4030,32 @@ function bindEvents() {
     });
   });
 
+  $("#profileContextMenu").querySelectorAll("[data-profile-action]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const profile = profileById(state.profileContextId);
+      const action = button.dataset.profileAction;
+      hideProfileContextMenu();
+      if (!profile) return;
+      if (action === "connect") await beginProfileConnection(profile);
+      if (action === "edit") openProfileDialog(profile);
+      if (action === "duplicate") await duplicateConnectionProfile(profile);
+      if (action === "favorite") await toggleProfileFavorite(profile);
+      if (action === "delete") await deleteConnectionProfile(profile);
+    });
+  });
+
   document.addEventListener("pointerdown", (event) => {
     if (!$("#terminalContextMenu").contains(event.target)) hideTerminalContextMenu();
+    if (!$("#profileContextMenu").contains(event.target)) hideProfileContextMenu();
   });
-  window.addEventListener("blur", hideTerminalContextMenu);
-  window.addEventListener("resize", hideTerminalContextMenu);
+  window.addEventListener("blur", () => {
+    hideTerminalContextMenu();
+    hideProfileContextMenu();
+  });
+  window.addEventListener("resize", () => {
+    hideTerminalContextMenu();
+    hideProfileContextMenu();
+  });
 
   const resizeObserver = new ResizeObserver(() => scheduleActiveTerminalResize());
   resizeObserver.observe(viewport);

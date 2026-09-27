@@ -20,10 +20,10 @@
 
 ### Duplicate
 
-- 复制后生成新的 Profile。
-- ID 必须不同。
-- 默认要求确认或修改名称。
-- Secret reference 是否复制要由 credential 策略决定，不能复制明文 secret。
+- 复制后生成新的 Profile，ID 必须不同。
+- 默认名称自动使用“原名 副本”；重名时依次使用“副本 2 / 副本 3 ...”，复制操作不能因为名称冲突直接失败。
+- 保存的 Password credential reference 不复制；不得复制任何明文 secret。
+- 右键连接菜单和 Ctrl+K 均可触发复制；复制成功后选中新 Profile，方便继续编辑。
 
 ### Delete
 

@@ -916,6 +916,14 @@ button, input, select {
   opacity: .55;
 }
 
+.profile-context-menu button.is-danger {
+  color: var(--dk-danger);
+}
+
+.profile-context-menu button.is-danger:hover {
+  background: color-mix(in srgb, var(--dk-danger) 10%, transparent);
+}
+
 .terminal-context-menu kbd {
   color: var(--dk-text-muted);
   font-size: 9.5px;
