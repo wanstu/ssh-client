@@ -642,6 +642,178 @@ func (a *App) MoveProfiles(ids []string, groupID string) (UIState, error) {
 	return a.GetState()
 }
 
+func selectedProfileIDs(ids []string) (map[string]struct{}, error) {
+	wanted := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		wanted[id] = struct{}{}
+	}
+	if len(wanted) == 0 {
+		return nil, errors.New("至少选择一个连接")
+	}
+	return wanted, nil
+}
+
+func (a *App) SetProfilesFavorite(ids []string, favorite bool) (UIState, error) {
+	wanted, err := selectedProfileIDs(ids)
+	if err != nil {
+		return UIState{}, err
+	}
+	_, err = a.store.Update(func(settings *model.Settings) error {
+		found := 0
+		for i := range settings.Profiles {
+			if _, ok := wanted[settings.Profiles[i].ID]; ok {
+				settings.Profiles[i].Favorite = favorite
+				found++
+			}
+		}
+		if found != len(wanted) {
+			return fmt.Errorf("部分连接已不存在，请刷新后重试")
+		}
+		return nil
+	})
+	if err != nil {
+		return UIState{}, err
+	}
+	return a.GetState()
+}
+
+func normalizeBatchTags(values []string) []string {
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func (a *App) UpdateProfilesTags(ids, addTags, removeTags []string) (UIState, error) {
+	wanted, err := selectedProfileIDs(ids)
+	if err != nil {
+		return UIState{}, err
+	}
+	addTags = normalizeBatchTags(addTags)
+	removeTags = normalizeBatchTags(removeTags)
+	if len(addTags) == 0 && len(removeTags) == 0 {
+		return UIState{}, errors.New("没有要修改的标签")
+	}
+	removeSet := make(map[string]struct{}, len(removeTags))
+	for _, tag := range removeTags {
+		removeSet[strings.ToLower(tag)] = struct{}{}
+	}
+
+	_, err = a.store.Update(func(settings *model.Settings) error {
+		found := 0
+		for i := range settings.Profiles {
+			profile := &settings.Profiles[i]
+			if _, ok := wanted[profile.ID]; !ok {
+				continue
+			}
+			found++
+			next := make([]string, 0, len(profile.Tags)+len(addTags))
+			seen := map[string]struct{}{}
+			for _, tag := range profile.Tags {
+				tag = strings.TrimSpace(tag)
+				key := strings.ToLower(tag)
+				if tag == "" {
+					continue
+				}
+				if _, remove := removeSet[key]; remove {
+					continue
+				}
+				if _, duplicate := seen[key]; duplicate {
+					continue
+				}
+				seen[key] = struct{}{}
+				next = append(next, tag)
+			}
+			for _, tag := range addTags {
+				key := strings.ToLower(tag)
+				if _, remove := removeSet[key]; remove {
+					continue
+				}
+				if _, duplicate := seen[key]; duplicate {
+					continue
+				}
+				seen[key] = struct{}{}
+				next = append(next, tag)
+			}
+			profile.Tags = next
+		}
+		if found != len(wanted) {
+			return fmt.Errorf("部分连接已不存在，请刷新后重试")
+		}
+		return nil
+	})
+	if err != nil {
+		return UIState{}, err
+	}
+	return a.GetState()
+}
+
+func (a *App) DeleteProfiles(ids []string) (UIState, error) {
+	wanted, err := selectedProfileIDs(ids)
+	if err != nil {
+		return UIState{}, err
+	}
+	current, err := a.store.Load()
+	if err != nil {
+		return UIState{}, err
+	}
+
+	credentialRefs := make([]string, 0, len(wanted))
+	found := 0
+	for _, profile := range current.Profiles {
+		if _, selected := wanted[profile.ID]; selected {
+			found++
+			if profile.Auth.CredentialRef != "" {
+				credentialRefs = append(credentialRefs, profile.Auth.CredentialRef)
+			}
+			continue
+		}
+		if profile.Network.Mode == "jump_host" {
+			if _, deletingJump := wanted[profile.Network.JumpProfileID]; deletingJump {
+				return UIState{}, fmt.Errorf("连接 %q 正被未选中的 %q 用作 Jump Host", profile.Network.JumpProfileID, profile.Name)
+			}
+		}
+	}
+	if found != len(wanted) {
+		return UIState{}, fmt.Errorf("部分连接已不存在，请刷新后重试")
+	}
+
+	_, err = a.store.Update(func(settings *model.Settings) error {
+		next := settings.Profiles[:0]
+		for _, profile := range settings.Profiles {
+			if _, selected := wanted[profile.ID]; selected {
+				continue
+			}
+			next = append(next, profile)
+		}
+		settings.Profiles = next
+		return nil
+	})
+	if err != nil {
+		return UIState{}, err
+	}
+
+	for _, ref := range credentialRefs {
+		_ = a.secure.Delete(ref)
+	}
+	return a.GetState()
+}
+
 func (a *App) ConnectProfile(id string, credentials sshclient.Credentials, rememberPassword bool) (sshclient.SessionSnapshot, error) {
 	settings, err := a.store.Load()
 	if err != nil {

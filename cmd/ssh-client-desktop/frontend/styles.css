@@ -267,6 +267,82 @@ button, input, select {
   justify-self: end;
 }
 
+.profile-batch-panel {
+  margin-top: 8px;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--dk-primary) 34%, var(--dk-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--dk-primary) 7%, var(--dk-bg-elevated));
+  display: grid;
+  gap: 8px;
+}
+
+.profile-batch-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.profile-batch-summary strong {
+  min-width: 0;
+  color: var(--dk-text);
+  font-size: 11px;
+}
+
+.profile-batch-summary > div,
+.profile-batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.profile-batch-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.profile-batch-tags {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.profile-batch-panel select,
+.profile-batch-panel input {
+  min-width: 0;
+  height: 32px;
+  border: 1px solid var(--dk-border);
+  border-radius: 8px;
+  background: var(--dk-bg-app);
+  color: var(--dk-text);
+  padding: 0 8px;
+  outline: none;
+  font-size: 10px;
+}
+
+.profile-batch-panel select:focus,
+.profile-batch-panel input:focus {
+  border-color: var(--dk-primary);
+  box-shadow: 0 0 0 2px var(--dk-focus-ring);
+}
+
+.profile-batch-actions {
+  justify-content: flex-end;
+}
+
+.connection-row.is-batch-selected {
+  border-color: color-mix(in srgb, var(--dk-primary) 40%, transparent);
+  background: color-mix(in srgb, var(--dk-nav-active-bg) 80%, var(--dk-bg-elevated));
+  box-shadow: inset 3px 0 0 var(--dk-primary);
+}
+
+.batch-selection-marker {
+  border: 1px solid color-mix(in srgb, var(--dk-primary) 48%, var(--dk-border));
+  background: color-mix(in srgb, var(--dk-primary) 10%, var(--dk-bg-muted));
+  color: var(--dk-primary);
+  font-size: 15px;
+}
+
 .connection-list {
   min-height: 0;
   overflow: auto;

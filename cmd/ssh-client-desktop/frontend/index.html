@@ -36,6 +36,7 @@
         <small id="sidebarMeta">读取中</small>
       </div>
       <div class="sidebar-header-actions">
+        <button id="batchProfilesButton" class="dk-button dk-button-secondary compact-button" type="button" title="批量管理连接">批量</button>
         <button id="importConfigButton" class="dk-button dk-button-secondary compact-button" type="button" title="从 SSH Config 导入">⇩</button>
         <button id="newProfileButton" class="dk-button dk-button-primary compact-button" type="button" title="新建连接">＋</button>
         <button id="newSnippetButton" class="dk-button dk-button-primary compact-button is-hidden" type="button" title="新建命令片段">＋</button>
@@ -66,6 +67,30 @@
           <option value="ssh_agent">SSH Agent</option>
         </select>
         <button id="clearProfileFiltersButton" class="dk-button dk-button-ghost compact-button filter-clear-button" type="button">清除筛选</button>
+      </div>
+      <div id="profileBatchPanel" class="profile-batch-panel is-hidden">
+        <div class="profile-batch-summary">
+          <strong id="profileBatchCount">已选 0</strong>
+          <div>
+            <button id="selectVisibleProfilesButton" class="dk-button dk-button-ghost compact-button" type="button">全选当前</button>
+            <button id="clearProfileSelectionButton" class="dk-button dk-button-ghost compact-button" type="button">清空</button>
+          </div>
+        </div>
+        <div class="profile-batch-row">
+          <select id="batchProfileGroup" aria-label="批量移动到分组"><option value="">未分组</option></select>
+          <button id="batchMoveProfilesButton" class="dk-button dk-button-secondary compact-button" type="button">移动</button>
+        </div>
+        <div class="profile-batch-row profile-batch-tags">
+          <input id="batchProfileTags" autocomplete="off" placeholder="标签，逗号分隔">
+          <button id="batchAddTagsButton" class="dk-button dk-button-secondary compact-button" type="button">添加</button>
+          <button id="batchRemoveTagsButton" class="dk-button dk-button-secondary compact-button" type="button">移除</button>
+        </div>
+        <div class="profile-batch-actions">
+          <button id="batchFavoriteButton" class="dk-button dk-button-secondary compact-button" type="button">收藏</button>
+          <button id="batchUnfavoriteButton" class="dk-button dk-button-secondary compact-button" type="button">取消收藏</button>
+          <button id="batchDeleteProfilesButton" class="dk-button dk-button-danger compact-button" type="button">删除</button>
+          <button id="finishProfileBatchButton" class="dk-button dk-button-primary compact-button" type="button">完成</button>
+        </div>
       </div>
     </div>
     <div id="connectionList" class="connection-list"></div>

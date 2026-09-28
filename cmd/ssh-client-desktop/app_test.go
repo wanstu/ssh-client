@@ -265,6 +265,95 @@ func TestDuplicateProfileNameAvoidsCollisions(t *testing.T) {
 	}
 }
 
+func TestBatchProfileOperations(t *testing.T) {
+	app, profileA := newCredentialTestApp(t)
+	profileA.Tags = []string{"ops"}
+	ref := passwordCredentialRef(profileA.ID)
+	profileA.Auth.CredentialRef = ref
+	if err := app.secure.Put(ref, []byte("saved-password")); err != nil {
+		t.Fatal(err)
+	}
+
+	profileB := model.DefaultProfile()
+	profileB.ID = "profile_b"
+	profileB.Name = "profile-b"
+	profileB.Host = "10.0.0.2"
+	profileB.Username = "root"
+	profileB.Tags = []string{"Blue", "remove"}
+
+	profileC := model.DefaultProfile()
+	profileC.ID = "profile_c"
+	profileC.Name = "profile-c"
+	profileC.Host = "10.0.0.3"
+	profileC.Username = "root"
+	profileC.Network.Mode = "jump_host"
+	profileC.Network.JumpProfileID = profileA.ID
+
+	settings := model.DefaultSettings()
+	settings.Groups = []model.ConnectionGroup{{ID: "group_ops", Name: "Ops", Order: 1}}
+	settings.Profiles = []model.ConnectionProfile{profileA, profileB, profileC}
+	if err := app.store.Save(settings); err != nil {
+		t.Fatal(err)
+	}
+
+	moved, err := app.MoveProfiles([]string{profileA.ID, profileB.ID}, "group_ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range moved.Settings.Profiles[:2] {
+		if profile.GroupID != "group_ops" {
+			t.Fatalf("profile %q group = %q", profile.ID, profile.GroupID)
+		}
+	}
+
+	favorited, err := app.SetProfilesFavorite([]string{profileA.ID, profileB.ID}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range favorited.Settings.Profiles[:2] {
+		if !profile.Favorite {
+			t.Fatalf("profile %q was not favorited", profile.ID)
+		}
+	}
+
+	tagged, err := app.UpdateProfilesTags(
+		[]string{profileA.ID, profileB.ID},
+		[]string{" Prod ", "prod"},
+		[]string{"OPS", "remove"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotTags := map[string][]string{}
+	for _, profile := range tagged.Settings.Profiles {
+		gotTags[profile.ID] = profile.Tags
+	}
+	if len(gotTags[profileA.ID]) != 1 || gotTags[profileA.ID][0] != "Prod" {
+		t.Fatalf("profile A tags = %#v", gotTags[profileA.ID])
+	}
+	if len(gotTags[profileB.ID]) != 2 || gotTags[profileB.ID][0] != "Blue" || gotTags[profileB.ID][1] != "Prod" {
+		t.Fatalf("profile B tags = %#v", gotTags[profileB.ID])
+	}
+
+	if _, err := app.DeleteProfiles([]string{profileA.ID, profileB.ID}); err == nil {
+		t.Fatal("expected delete to fail while an unselected profile depends on selected jump host")
+	}
+	if _, err := app.secure.Get(ref); err != nil {
+		t.Fatalf("credential was removed after rejected delete: %v", err)
+	}
+
+	deleted, err := app.DeleteProfiles([]string{profileA.ID, profileB.ID, profileC.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted.Settings.Profiles) != 0 {
+		t.Fatalf("profiles remain after batch delete: %#v", deleted.Settings.Profiles)
+	}
+	if _, err := app.secure.Get(ref); !errors.Is(err, secureconfig.ErrNotFound) {
+		t.Fatalf("credential still exists after batch delete: %v", err)
+	}
+}
+
 func TestCommandSnippetCRUD(t *testing.T) {
 	app, _ := newCredentialTestApp(t)
 	originalCommand := "  journalctl -u app --since today | tail -n 50  "

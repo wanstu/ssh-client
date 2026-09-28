@@ -12,6 +12,10 @@ import {
   UpdateProfile,
   DuplicateProfile,
   DeleteProfile,
+  MoveProfiles,
+  SetProfilesFavorite,
+  UpdateProfilesTags,
+  DeleteProfiles,
   ClearSavedCredential,
   ConnectProfile,
   QuickConnect,
@@ -75,6 +79,8 @@ const state = {
   search: "",
   profileFiltersOpen: false,
   profileFilters: { status: "", group: "", tag: "", auth: "" },
+  profileBatchMode: false,
+  selectedProfileIds: new Set(),
   sidebarCollapsed: false,
   terminalContextSelection: "",
   profileContextId: "",
@@ -2262,6 +2268,147 @@ function profileFilterStatus(profileId) {
   return latest;
 }
 
+function pruneProfileBatchSelection() {
+  const existing = new Set((state.settings.profiles || []).map((profile) => profile.id));
+  for (const id of [...state.selectedProfileIds]) {
+    if (!existing.has(id)) state.selectedProfileIds.delete(id);
+  }
+}
+
+function setProfileBatchMode(enabled, render = true) {
+  state.profileBatchMode = !!enabled;
+  if (!state.profileBatchMode) state.selectedProfileIds.clear();
+  if (render) renderSidebar();
+}
+
+function selectedProfileIdsArray() {
+  pruneProfileBatchSelection();
+  return [...state.selectedProfileIds];
+}
+
+function connectionProfileMatchesSearch(profile, query = state.search.trim().toLowerCase()) {
+  if (!query) return true;
+  const group = (state.settings.groups || []).find((item) => item.id === profile.group_id);
+  const text = [profile.name, profile.host, profile.username, group && group.name, ...(profile.tags || [])]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return text.includes(query);
+}
+
+function visibleConnectionProfiles() {
+  const query = state.search.trim().toLowerCase();
+  return (state.settings.profiles || []).filter((profile) =>
+    profileMatchesFilters(profile) && connectionProfileMatchesSearch(profile, query)
+  );
+}
+
+function batchTagValues() {
+  return $("#batchProfileTags").value
+    .split(/[,，]/)
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+function requireBatchSelection() {
+  const ids = selectedProfileIdsArray();
+  if (!ids.length) {
+    showToast("请先选择至少一个连接");
+    return null;
+  }
+  return ids;
+}
+
+async function applyProfileBatchResult(promise, successMessage, clearTagInput = false) {
+  try {
+    const next = await promise;
+    state.settings = next.settings;
+    pruneProfileBatchSelection();
+    if (clearTagInput) $("#batchProfileTags").value = "";
+    renderSidebar();
+    showToast(successMessage);
+    return true;
+  } catch (error) {
+    showToast(String(error));
+    return false;
+  }
+}
+
+function refreshProfileBatchPanel(visibleProfiles = []) {
+  const panel = $("#profileBatchPanel");
+  panel.classList.toggle("is-hidden", !state.profileBatchMode);
+  if (!state.profileBatchMode) return;
+
+  pruneProfileBatchSelection();
+  const count = state.selectedProfileIds.size;
+  $("#profileBatchCount").textContent = "已选 " + count + " · 当前显示 " + visibleProfiles.length;
+  $("#selectVisibleProfilesButton").disabled = visibleProfiles.length === 0;
+  $("#clearProfileSelectionButton").disabled = count === 0;
+
+  for (const id of [
+    "#batchMoveProfilesButton", "#batchAddTagsButton", "#batchRemoveTagsButton",
+    "#batchFavoriteButton", "#batchUnfavoriteButton", "#batchDeleteProfilesButton"
+  ]) {
+    $(id).disabled = count === 0;
+  }
+}
+
+function selectVisibleBatchProfiles() {
+  for (const profile of visibleConnectionProfiles()) state.selectedProfileIds.add(profile.id);
+  renderSidebar();
+}
+
+async function moveSelectedProfiles() {
+  const ids = requireBatchSelection();
+  if (!ids) return;
+  const groupID = $("#batchProfileGroup").value;
+  await applyProfileBatchResult(
+    MoveProfiles(ids, groupID),
+    groupID ? "已批量移动连接" : "已批量移到未分组"
+  );
+}
+
+async function updateSelectedProfileTags(mode) {
+  const ids = requireBatchSelection();
+  if (!ids) return;
+  const tags = batchTagValues();
+  if (!tags.length) {
+    showToast("请输入至少一个标签");
+    return;
+  }
+  const addTags = mode === "add" ? tags : [];
+  const removeTags = mode === "remove" ? tags : [];
+  await applyProfileBatchResult(
+    UpdateProfilesTags(ids, addTags, removeTags),
+    mode === "add" ? "标签已批量添加" : "标签已批量移除",
+    true
+  );
+}
+
+async function setSelectedProfilesFavorite(favorite) {
+  const ids = requireBatchSelection();
+  if (!ids) return;
+  await applyProfileBatchResult(
+    SetProfilesFavorite(ids, favorite),
+    favorite ? "已批量收藏" : "已批量取消收藏"
+  );
+}
+
+async function deleteSelectedProfiles() {
+  const ids = requireBatchSelection();
+  if (!ids) return;
+  const profiles = (state.settings.profiles || []).filter((profile) => state.selectedProfileIds.has(profile.id));
+  const preview = profiles.slice(0, 3).map((profile) => profile.name).join("、");
+  const suffix = profiles.length > 3 ? " 等 " + profiles.length + " 个连接" : "";
+  if (!window.confirm("确定删除 " + preview + suffix + "？\n\n已保存的密码引用也会一起清理。")) return;
+  const ok = await applyProfileBatchResult(
+    DeleteProfiles(ids),
+    "已删除 " + ids.length + " 个连接"
+  );
+  if (ok) state.selectedProfileIds.clear();
+  renderSidebar();
+}
+
 function activeProfileFilterCount() {
   return Object.values(state.profileFilters).filter(Boolean).length;
 }
@@ -2271,9 +2418,15 @@ function refreshProfileFilterOptions() {
   const groups = state.settings.groups || [];
   const groupSelect = $("#profileGroupFilter");
   const tagSelect = $("#profileTagFilter");
+  const batchGroupSelect = $("#batchProfileGroup");
+  const previousBatchGroup = batchGroupSelect.value;
 
   groupSelect.replaceChildren(new Option("全部分组", ""));
-  for (const group of groups) groupSelect.add(new Option(group.name, group.id));
+  batchGroupSelect.replaceChildren(new Option("未分组", ""));
+  for (const group of groups) {
+    groupSelect.add(new Option(group.name, group.id));
+    batchGroupSelect.add(new Option(group.name, group.id));
+  }
   if (profiles.some((profile) => !profile.group_id)) groupSelect.add(new Option("未分组", "__ungrouped"));
 
   const tags = new Map();
@@ -2295,6 +2448,8 @@ function refreshProfileFilterOptions() {
   groupSelect.value = state.profileFilters.group;
   tagSelect.value = state.profileFilters.tag;
   $("#profileAuthFilter").value = state.profileFilters.auth;
+  const batchGroupValues = new Set([...batchGroupSelect.options].map((option) => option.value));
+  batchGroupSelect.value = batchGroupValues.has(previousBatchGroup) ? previousBatchGroup : "";
 
   const count = activeProfileFilterCount();
   const toggle = $("#profileFilterToggleButton");
@@ -2334,11 +2489,15 @@ function renderSidebar() {
   list.replaceChildren();
 
   const connectionsNav = state.nav === "connections";
-  $("#importConfigButton").classList.toggle("is-hidden", !connectionsNav);
-  $("#newProfileButton").classList.toggle("is-hidden", !connectionsNav);
+  $("#batchProfilesButton").classList.toggle("is-hidden", !connectionsNav);
+  $("#batchProfilesButton").textContent = state.profileBatchMode ? "完成" : "批量";
+  $("#batchProfilesButton").classList.toggle("is-active", state.profileBatchMode);
+  $("#importConfigButton").classList.toggle("is-hidden", !connectionsNav || state.profileBatchMode);
+  $("#newProfileButton").classList.toggle("is-hidden", !connectionsNav || state.profileBatchMode);
   $("#newSnippetButton").classList.toggle("is-hidden", state.nav !== "snippets");
   $("#profileFilterToggleButton").classList.toggle("is-hidden", !connectionsNav);
   $("#profileFilterPanel").classList.toggle("is-hidden", !connectionsNav || !state.profileFiltersOpen);
+  $("#profileBatchPanel").classList.toggle("is-hidden", !connectionsNav || !state.profileBatchMode);
   if (connectionsNav) refreshProfileFilterOptions();
 
   search.placeholder = state.nav === "history"
@@ -2392,17 +2551,17 @@ function renderSidebar() {
   const profiles = state.settings.profiles || [];
   const query = state.search.trim().toLowerCase();
   const filterCount = activeProfileFilterCount();
-  const filtered = profiles.filter((profile) => {
-    if (!profileMatchesFilters(profile)) return false;
-    if (!query) return true;
-    const group = (state.settings.groups || []).find((item) => item.id === profile.group_id);
-    const text = [profile.name, profile.host, profile.username, group && group.name, ...(profile.tags || [])].filter(Boolean).join(" ").toLowerCase();
-    return text.includes(query);
-  });
+  const filtered = visibleConnectionProfiles();
   const connectedCount = state.sessions.filter((s) => s.state === "connected").length;
-  meta.textContent = query || filterCount
-    ? String(filtered.length) + " / " + String(profiles.length) + " 个主机 · " + String(filterCount) + " 个筛选"
-    : String(profiles.length) + " 个主机 · " + String(connectedCount) + " 个已连接";
+  if (state.profileBatchMode) {
+    pruneProfileBatchSelection();
+    meta.textContent = String(state.selectedProfileIds.size) + " 已选 · " + String(filtered.length) + " / " + String(profiles.length) + " 个可见";
+  } else {
+    meta.textContent = query || filterCount
+      ? String(filtered.length) + " / " + String(profiles.length) + " 个主机 · " + String(filterCount) + " 个筛选"
+      : String(profiles.length) + " 个主机 · " + String(connectedCount) + " 个已连接";
+  }
+  refreshProfileBatchPanel(filtered);
 
   const groups = [];
   const favorites = filtered.filter((profile) => profile.favorite);
@@ -2441,15 +2600,20 @@ function renderSidebar() {
 }
 
 function createConnectionRow(profile) {
+  const batchSelected = state.profileBatchMode && state.selectedProfileIds.has(profile.id);
   const row = document.createElement("button");
   row.type = "button";
-  row.className = "connection-row" + (state.selectedProfileId === profile.id ? " is-selected" : "");
+  row.className = "connection-row"
+    + (!state.profileBatchMode && state.selectedProfileId === profile.id ? " is-selected" : "")
+    + (batchSelected ? " is-batch-selected" : "");
   row.dataset.profileId = profile.id;
-  row.title = profile.name + "\n" + profile.username + "@" + profile.host + ":" + profile.port;
+  row.title = state.profileBatchMode
+    ? (batchSelected ? "已选择 · 点击取消选择" : "点击加入批量选择")
+    : profile.name + "\n" + profile.username + "@" + profile.host + ":" + profile.port;
 
   const avatar = document.createElement("span");
-  avatar.className = "connection-avatar";
-  avatar.textContent = escapeInitials(profile.name);
+  avatar.className = "connection-avatar" + (state.profileBatchMode ? " batch-selection-marker" : "");
+  avatar.textContent = state.profileBatchMode ? (batchSelected ? "✓" : "○") : escapeInitials(profile.name);
 
   const copy = document.createElement("span");
   copy.className = "connection-content";
@@ -2478,13 +2642,23 @@ function createConnectionRow(profile) {
   dot.className = "connection-status " + profileStatus(profile.id);
 
   row.append(avatar, copy, dot);
-  row.addEventListener("click", () => {
+  row.addEventListener("click", (event) => {
+    if (state.profileBatchMode) {
+      if (event.detail > 1) return;
+      if (state.selectedProfileIds.has(profile.id)) state.selectedProfileIds.delete(profile.id);
+      else state.selectedProfileIds.add(profile.id);
+      renderSidebar();
+      return;
+    }
     state.selectedProfileId = profile.id;
     renderSidebar();
   });
-  row.addEventListener("dblclick", () => beginProfileConnection(profile));
+  row.addEventListener("dblclick", () => {
+    if (!state.profileBatchMode) beginProfileConnection(profile);
+  });
   row.addEventListener("contextmenu", (event) => {
     event.preventDefault();
+    if (state.profileBatchMode) return;
     showProfileContextMenu(event, profile);
   });
   return row;
@@ -4408,6 +4582,7 @@ function bindEvents() {
     if (sessionBatchCloseDepth === 0) renderAll();
   });
 
+  $("#batchProfilesButton").addEventListener("click", () => setProfileBatchMode(!state.profileBatchMode));
   $("#newProfileButton").addEventListener("click", () => openProfileDialog());
   $("#newSnippetButton").addEventListener("click", () => openSnippetDialog());
   $("#importConfigButton").addEventListener("click", openImportDialog);
@@ -4445,6 +4620,7 @@ function bindEvents() {
     button.addEventListener("click", () => {
       document.querySelectorAll("[data-nav]").forEach((item) => item.classList.remove("is-active"));
       button.classList.add("is-active");
+      if (button.dataset.nav !== "connections" && state.profileBatchMode) setProfileBatchMode(false, false);
       state.nav = button.dataset.nav;
       renderSidebar();
     });
@@ -4470,6 +4646,19 @@ function bindEvents() {
     });
   }
   $("#clearProfileFiltersButton").addEventListener("click", clearProfileFilters);
+
+  $("#selectVisibleProfilesButton").addEventListener("click", selectVisibleBatchProfiles);
+  $("#clearProfileSelectionButton").addEventListener("click", () => {
+    state.selectedProfileIds.clear();
+    renderSidebar();
+  });
+  $("#batchMoveProfilesButton").addEventListener("click", moveSelectedProfiles);
+  $("#batchAddTagsButton").addEventListener("click", () => updateSelectedProfileTags("add"));
+  $("#batchRemoveTagsButton").addEventListener("click", () => updateSelectedProfileTags("remove"));
+  $("#batchFavoriteButton").addEventListener("click", () => setSelectedProfilesFavorite(true));
+  $("#batchUnfavoriteButton").addEventListener("click", () => setSelectedProfilesFavorite(false));
+  $("#batchDeleteProfilesButton").addEventListener("click", deleteSelectedProfiles);
+  $("#finishProfileBatchButton").addEventListener("click", () => setProfileBatchMode(false));
 
   $("#sessionRenameForm").addEventListener("submit", (event) => {
     event.preventDefault();
