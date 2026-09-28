@@ -81,6 +81,10 @@
 - Private Key 内容不复制。
 - known_hosts 不覆盖。
 - ProxyJump 可识别。
+- `PreviewFile` 自动展开本地 `Include`，按 Include 出现位置内联解析，支持相对路径、`~`、`%d`、glob 与带引号路径；Included Host 的 `source_path` 必须指向真实来源文件。
+- Include 循环或重复文件必须跳过并给 warning；未匹配 glob、不可读 Include 也给 warning。为避免异常配置无限展开，最大深度 16、最多 256 个文件、总读取量 4 MiB，超过上限直接停止预览并报错。
+- 纯字符串 `Parse()` 不访问磁盘；其中出现 Include 仍只给“未自动展开” warning。只有用户明确选择文件走 `PreviewFile()` 时才读取 Include。
+- `Match` 块仍不导入并给 warning；`ProxyCommand` 仍标记为不可安全转换，不因 Include 支持而放宽。
 - 非交互 Host 可跳过。
 - 重复导入必须有冲突策略，不静默覆盖。
 

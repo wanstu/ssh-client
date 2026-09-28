@@ -205,6 +205,10 @@ source_ref?
 第一阶段：
 
 - Import 是一次性复制
+- PreviewFile 会在本地展开 SSH Config 的 Include 图；Include 只用于形成预览，不会改写原文件，也不会建立后续同步关系
+- Include 使用所选主配置文件目录作为相对路径基准，支持 `~` / `%d` / glob；循环与重复文件去重，并有深度、文件数、总读取量上限
+- `Parse(content, sourcePath)` 保持纯解析，不读取 Include 指向的磁盘文件
+- Match / ProxyCommand 仍保持保守处理：Match 不导入，ProxyCommand 不自动转换
 - 不自动双向同步
 - 后续可增加 Re-import Preview
 
