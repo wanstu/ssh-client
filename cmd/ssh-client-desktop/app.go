@@ -1294,14 +1294,6 @@ func existingSSHConfigProfileID(settings *model.Settings, entry sshconfig.Entry)
 		}
 	}
 
-	for _, profile := range settings.Profiles {
-		if profile.Source.Kind != "ssh_config" {
-			continue
-		}
-		if strings.EqualFold(sourceAlias(profile.Source.Ref), alias) {
-			return profile.ID, true
-		}
-	}
 	return "", false
 }
 

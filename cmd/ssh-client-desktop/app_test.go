@@ -404,6 +404,39 @@ func TestImportSSHConfigIsIdempotentAndReusesExistingJump(t *testing.T) {
 	}
 }
 
+func TestImportSSHConfigRejectsSameAliasFromDifferentSource(t *testing.T) {
+	app, _ := newCredentialTestApp(t)
+
+	imported := model.DefaultProfile()
+	imported.ID = "profile_shared"
+	imported.Name = "shared"
+	imported.Host = "10.0.0.10"
+	imported.Username = "root"
+	imported.Source = model.SourceInfo{Kind: "ssh_config", Ref: "C:/ssh/conf.d/a.conf#shared"}
+
+	settings := model.DefaultSettings()
+	settings.Profiles = []model.ConnectionProfile{imported}
+	if err := app.store.Save(settings); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := app.ImportSSHConfig([]sshconfig.Entry{{
+		Alias: "shared", HostName: "10.0.0.20", User: "deploy", Port: 22,
+		SourcePath: "C:/ssh/conf.d/b.conf", Supported: true,
+	}})
+	if err == nil {
+		t.Fatal("expected same alias from a different SSH Config source to conflict")
+	}
+
+	current, loadErr := app.store.Load()
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(current.Profiles) != 1 || current.Profiles[0].ID != imported.ID || current.Profiles[0].Host != imported.Host {
+		t.Fatalf("different-source conflict mutated existing profile: %#v", current.Profiles)
+	}
+}
+
 func TestImportSSHConfigRejectsManualNameConflict(t *testing.T) {
 	app, profile := newCredentialTestApp(t)
 	profile.Name = "target"
