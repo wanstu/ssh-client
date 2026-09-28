@@ -299,6 +299,23 @@
         <button id="clearSavedPasswordButton" class="dk-button dk-button-secondary compact-button" type="button">清除保存密码</button>
       </div>
       <label class="dk-field is-span-2">标签<input id="profileTags" autocomplete="off" placeholder="Web, Linux, 生产环境"></label>
+      <label class="dk-field">网络模式
+        <select id="profileNetworkMode">
+          <option value="direct">Direct</option>
+          <option value="jump_host">Jump Host / ProxyJump</option>
+          <option value="socks5" disabled>SOCKS5（下一批）</option>
+        </select>
+      </label>
+      <label id="profileJumpHostField" class="dk-field is-hidden">Jump Host
+        <select id="profileJumpHost"></select>
+      </label>
+      <label class="dk-field">连接超时（秒）
+        <input id="profileTimeoutSec" type="number" min="1" max="300" value="10">
+      </label>
+      <label class="dk-field">Keepalive（秒）
+        <input id="profileKeepaliveSec" type="number" min="0" max="3600" value="30">
+      </label>
+      <div id="profileNetworkNote" class="profile-terminal-compat-note is-span-2">Direct：客户端直接连接目标 SSH 主机。</div>
     </div>
 
     <section class="profile-terminal-section" aria-labelledby="profileTerminalHeading">

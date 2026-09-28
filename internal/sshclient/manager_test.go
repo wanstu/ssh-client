@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -16,6 +17,21 @@ import (
 	"github.com/wanstu/ssh-client/internal/model"
 	"golang.org/x/crypto/ssh"
 )
+
+func TestCloneConnectConfigCopiesJumpCredentials(t *testing.T) {
+	original := ConnectConfig{
+		Credentials: Credentials{Password: "target"},
+		Jump:        &JumpConfig{ProfileID: "jump", Credentials: Credentials{Password: "jump"}},
+	}
+	cloned := cloneConnectConfig(original)
+	if cloned.Jump == original.Jump {
+		t.Fatal("jump config pointer was shared")
+	}
+	cloned.Jump.Credentials.Password = ""
+	if original.Jump.Credentials.Password != "jump" {
+		t.Fatal("clearing cloned jump credentials mutated original config")
+	}
+}
 
 func TestManagerDirectPasswordSession(t *testing.T) {
 	addr, stopServer := startTestSSHServer(t)
@@ -95,6 +111,108 @@ func TestManagerDirectPasswordSession(t *testing.T) {
 
 	if err := manager.Disconnect(session.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestManagerJumpHostPasswordSession(t *testing.T) {
+	targetAddr, stopTarget := startTestSSHServer(t)
+	defer stopTarget()
+	jumpAddr, stopJump := startTestSSHServer(t)
+	defer stopJump()
+
+	targetHost, targetPortText, err := net.SplitHostPort(targetAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetPort, err := strconv.Atoi(targetPortText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jumpHost, jumpPortText, err := net.SplitHostPort(jumpAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jumpPort, err := strconv.Atoi(jumpPortText)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var manager *Manager
+	events := make(chan any, 128)
+	scopes := make(chan string, 4)
+	manager = NewManager(t.TempDir(), func(event string, payload any) {
+		switch event {
+		case EventHostKey:
+			challenge := payload.(HostKeyChallenge)
+			scopes <- challenge.Scope
+			if err := manager.ResolveHostKey(challenge.ID, "trust_once"); err != nil {
+				t.Errorf("resolve host key: %v", err)
+			}
+		case EventSessionState, EventOutput:
+			events <- payload
+		}
+	})
+
+	profile := model.DefaultProfile()
+	session, err := manager.Connect(ConnectConfig{
+		Name:        "jump-target",
+		Host:        targetHost,
+		Port:        targetPort,
+		Username:    "tester",
+		Auth:        model.AuthConfig{Mode: "password"},
+		Terminal:    profile.Terminal,
+		Reconnect:   model.ReconnectConfig{Enabled: false, KeepTabOnDisconnect: true},
+		TimeoutSec:  3,
+		Credentials: Credentials{Password: "secret"},
+		Jump: &JumpConfig{
+			ProfileID: "jump_profile",
+			Name:      "jump-test", Host: jumpHost, Port: jumpPort, Username: "tester",
+			Auth: model.AuthConfig{Mode: "password"}, TimeoutSec: 3,
+			Credentials: Credentials{Password: "secret"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Disconnect(session.ID)
+
+	connected := false
+	echoed := false
+	deadline := time.After(5 * time.Second)
+	for !(connected && echoed) {
+		select {
+		case payload := <-events:
+			switch value := payload.(type) {
+			case SessionSnapshot:
+				if value.ID == session.ID && value.State == "connected" {
+					connected = true
+					if err := manager.Write(session.ID, "jump-ok\r"); err != nil {
+						t.Fatal(err)
+					}
+				}
+			case OutputEvent:
+				if value.SessionID != session.ID {
+					continue
+				}
+				data, err := base64.StdEncoding.DecodeString(value.DataBase64)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(data), "jump-ok") {
+					echoed = true
+				}
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for jump session: connected=%v echoed=%v", connected, echoed)
+		}
+	}
+
+	gotScopes := []string{}
+	for len(scopes) > 0 {
+		gotScopes = append(gotScopes, <-scopes)
+	}
+	if len(gotScopes) < 2 || gotScopes[0] != "jump" || gotScopes[1] != "target" {
+		t.Fatalf("host key scopes = %#v, want jump then target", gotScopes)
 	}
 }
 
@@ -280,6 +398,20 @@ func TestClosedSessionSuppressesLateStateEvents(t *testing.T) {
 	}
 }
 
+func TestManagedSessionClearCredentialsClearsJumpCredentials(t *testing.T) {
+	session := &managedSession{cfg: ConnectConfig{
+		Credentials: Credentials{Password: "target-password", Passphrase: "target-passphrase"},
+		Jump:        &JumpConfig{Credentials: Credentials{Password: "jump-password", Passphrase: "jump-passphrase"}},
+	}}
+	session.clearCredentials()
+	if session.cfg.Credentials.Password != "" || session.cfg.Credentials.Passphrase != "" {
+		t.Fatalf("target credentials were not cleared: %#v", session.cfg.Credentials)
+	}
+	if session.cfg.Jump.Credentials.Password != "" || session.cfg.Jump.Credentials.Passphrase != "" {
+		t.Fatalf("jump credentials were not cleared: %#v", session.cfg.Jump.Credentials)
+	}
+}
+
 func TestEncodeTerminalInput(t *testing.T) {
 	utf8Payload, err := encodeTerminalInput("中文", "UTF-8")
 	if err != nil {
@@ -368,6 +500,38 @@ func handleTestSSHConn(conn net.Conn, config *ssh.ServerConfig) {
 	}
 	go ssh.DiscardRequests(requests)
 	for request := range channels {
+		if request.ChannelType() == "direct-tcpip" {
+			var target struct {
+				Host       string
+				Port       uint32
+				OriginHost string
+				OriginPort uint32
+			}
+			if err := ssh.Unmarshal(request.ExtraData(), &target); err != nil {
+				_ = request.Reject(ssh.ConnectionFailed, "invalid direct-tcpip payload")
+				continue
+			}
+			upstream, err := net.Dial("tcp", net.JoinHostPort(target.Host, strconv.Itoa(int(target.Port))))
+			if err != nil {
+				_ = request.Reject(ssh.ConnectionFailed, err.Error())
+				continue
+			}
+			channel, reqs, err := request.Accept()
+			if err != nil {
+				_ = upstream.Close()
+				continue
+			}
+			go ssh.DiscardRequests(reqs)
+			go func(ch ssh.Channel, upstream net.Conn) {
+				defer ch.Close()
+				defer upstream.Close()
+				done := make(chan struct{}, 2)
+				go func() { _, _ = io.Copy(ch, upstream); done <- struct{}{} }()
+				go func() { _, _ = io.Copy(upstream, ch); done <- struct{}{} }()
+				<-done
+			}(channel, upstream)
+			continue
+		}
 		if request.ChannelType() != "session" {
 			_ = request.Reject(ssh.UnknownChannelType, "unsupported")
 			continue

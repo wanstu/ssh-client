@@ -129,6 +129,7 @@ func (s Settings) Validate() error {
 		groupIDs[group.ID] = struct{}{}
 	}
 	profileIDs := make(map[string]struct{}, len(s.Profiles))
+	profilesByID := make(map[string]ConnectionProfile, len(s.Profiles))
 	for _, profile := range s.Profiles {
 		if err := profile.Validate(); err != nil {
 			return fmt.Errorf("profile %q: %w", profile.Name, err)
@@ -137,6 +138,7 @@ func (s Settings) Validate() error {
 			return fmt.Errorf("duplicate profile id %q", profile.ID)
 		}
 		profileIDs[profile.ID] = struct{}{}
+		profilesByID[profile.ID] = profile
 		if profile.GroupID != "" {
 			if _, ok := groupIDs[profile.GroupID]; !ok {
 				return fmt.Errorf("profile %q references unknown group %q", profile.Name, profile.GroupID)
@@ -148,8 +150,12 @@ func (s Settings) Validate() error {
 			if profile.Network.JumpProfileID == profile.ID {
 				return fmt.Errorf("profile %q cannot jump through itself", profile.Name)
 			}
-			if _, ok := profileIDs[profile.Network.JumpProfileID]; !ok {
+			jump, ok := profilesByID[profile.Network.JumpProfileID]
+			if !ok {
 				return fmt.Errorf("profile %q references unknown jump profile %q", profile.Name, profile.Network.JumpProfileID)
+			}
+			if jump.Network.Mode != "direct" {
+				return fmt.Errorf("profile %q jump host %q must use direct network mode", profile.Name, jump.Name)
 			}
 		}
 	}

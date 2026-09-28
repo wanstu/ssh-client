@@ -55,6 +55,44 @@ type Manager struct {
 	emit     EmitFunc
 }
 
+func normalizeJumpConfig(cfg *ConnectConfig) error {
+	if cfg.Jump == nil {
+		return nil
+	}
+	jump := cfg.Jump
+	jump.Name = strings.TrimSpace(jump.Name)
+	jump.Host = strings.TrimSpace(jump.Host)
+	jump.Username = strings.TrimSpace(jump.Username)
+	if jump.Host == "" || jump.Username == "" {
+		return errors.New("jump host and username are required")
+	}
+	if jump.Port < 1 || jump.Port > 65535 {
+		return errors.New("jump host port must be between 1 and 65535")
+	}
+	if jump.TimeoutSec <= 0 {
+		jump.TimeoutSec = cfg.TimeoutSec
+	}
+	if jump.TimeoutSec <= 0 {
+		jump.TimeoutSec = 10
+	}
+	if jump.KeepaliveSec < 0 {
+		jump.KeepaliveSec = 0
+	}
+	if jump.Name == "" {
+		jump.Name = jump.Host
+	}
+	return nil
+}
+
+func cloneConnectConfig(cfg ConnectConfig) ConnectConfig {
+	cloned := cfg
+	if cfg.Jump != nil {
+		jumpCopy := *cfg.Jump
+		cloned.Jump = &jumpCopy
+	}
+	return cloned
+}
+
 func NewManager(dataDir string, emit EmitFunc) *Manager {
 	return &Manager{sessions: map[string]*managedSession{}, pending: map[string]*pendingChallenge{}, known: NewKnownHostStore(dataDir), emit: emit}
 }
@@ -68,6 +106,9 @@ func (m *Manager) Connect(cfg ConnectConfig) (SessionSnapshot, error) {
 	}
 	if cfg.Port < 1 || cfg.Port > 65535 {
 		return SessionSnapshot{}, errors.New("port must be between 1 and 65535")
+	}
+	if err := normalizeJumpConfig(&cfg); err != nil {
+		return SessionSnapshot{}, err
 	}
 	if cfg.TimeoutSec <= 0 {
 		cfg.TimeoutSec = 10
@@ -351,6 +392,9 @@ func (m *Manager) ReconnectSession(sessionID string, cfg ConnectConfig) (Session
 	if cfg.Port < 1 || cfg.Port > 65535 {
 		return SessionSnapshot{}, errors.New("port must be between 1 and 65535")
 	}
+	if err := normalizeJumpConfig(&cfg); err != nil {
+		return SessionSnapshot{}, err
+	}
 	if cfg.TimeoutSec <= 0 {
 		cfg.TimeoutSec = 10
 	}
@@ -424,7 +468,7 @@ func (m *Manager) CloneSession(sessionID string) (SessionSnapshot, error) {
 	}
 
 	ms.mu.Lock()
-	cfg := ms.cfg
+	cfg := cloneConnectConfig(ms.cfg)
 	state := ms.snapshot.State
 	closed := ms.closed
 	ms.mu.Unlock()
@@ -545,18 +589,146 @@ func (m *Manager) run(ms *managedSession) {
 	ms.clearCredentials()
 }
 
+func dialTCPContext(ctx context.Context, host string, port, timeoutSec, keepaliveSec int) (net.Conn, error) {
+	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	dialer := net.Dialer{Timeout: time.Duration(timeoutSec) * time.Second}
+	if keepaliveSec > 0 {
+		dialer.KeepAlive = time.Duration(keepaliveSec) * time.Second
+	}
+	return dialer.DialContext(ctx, "tcp", address)
+}
+
+func closeAuthClosers(closers []io.Closer) {
+	for _, closer := range closers {
+		_ = closer.Close()
+	}
+}
+
+func remapJumpAuthError(err error) error {
+	var coded *runtimeError
+	if !errors.As(err, &coded) {
+		return &runtimeError{Code: "JUMP_HOST_AUTH_FAILED", Stage: "jump_host_authenticate", Err: err}
+	}
+	switch coded.Code {
+	case "AUTH_PASSWORD_REQUIRED":
+		return &runtimeError{Code: "JUMP_HOST_PASSWORD_REQUIRED", Stage: "jump_host_authenticate", Err: coded.Err}
+	case "AUTH_KEY_PASSPHRASE_REQUIRED":
+		return &runtimeError{Code: "JUMP_HOST_KEY_PASSPHRASE_REQUIRED", Stage: "jump_host_authenticate", Err: coded.Err}
+	case "AUTH_AGENT_UNAVAILABLE":
+		return &runtimeError{Code: "JUMP_HOST_AGENT_UNAVAILABLE", Stage: "jump_host_authenticate", Err: coded.Err}
+	case "HOST_KEY_CHANGED", "HOST_KEY_REJECTED", "HOST_KEY_STORE_FAILED":
+		return coded
+	default:
+		return &runtimeError{Code: "JUMP_HOST_AUTH_FAILED", Stage: "jump_host_authenticate", Err: coded.Err}
+	}
+}
+
+func classifyJumpHandshakeError(err error) error {
+	var coded *runtimeError
+	if errors.As(err, &coded) {
+		if strings.HasPrefix(coded.Code, "HOST_KEY_") {
+			return coded
+		}
+		return remapJumpAuthError(coded)
+	}
+	text := strings.ToLower(err.Error())
+	if strings.Contains(text, "unable to authenticate") || strings.Contains(text, "no supported methods remain") {
+		return &runtimeError{Code: "JUMP_HOST_AUTH_FAILED", Stage: "jump_host_authenticate", Err: err}
+	}
+	return &runtimeError{Code: "JUMP_HOST_NEGOTIATION_FAILED", Stage: "jump_host_handshake", Err: err}
+}
+
+type dialResult struct {
+	conn net.Conn
+	err  error
+}
+
+func dialThroughJump(ctx context.Context, client *ssh.Client, address string, timeout time.Duration) (net.Conn, error) {
+	result := make(chan dialResult, 1)
+	go func() {
+		conn, err := client.Dial("tcp", address)
+		result <- dialResult{conn: conn, err: err}
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		_ = client.Close()
+		return nil, ctx.Err()
+	case <-timer.C:
+		_ = client.Close()
+		return nil, &runtimeError{Code: "JUMP_HOST_TARGET_TIMEOUT", Stage: "jump_host_dial", Retryable: true, Err: errors.New("timed out opening target connection through jump host")}
+	case value := <-result:
+		if value.err != nil {
+			return nil, &runtimeError{Code: "JUMP_HOST_TARGET_DIAL_FAILED", Stage: "jump_host_dial", Retryable: true, Err: value.err}
+		}
+		return value.conn, nil
+	}
+}
+
+func (m *Manager) openTargetConn(ms *managedSession, cfg ConnectConfig, targetAddress string) (net.Conn, func(), error) {
+	if cfg.Jump == nil {
+		m.setState(ms, "connecting", "tcp_connect", "正在连接 "+targetAddress, "", "")
+		raw, err := dialTCPContext(ms.ctx, cfg.Host, cfg.Port, cfg.TimeoutSec, cfg.KeepaliveSec)
+		if err != nil {
+			return nil, func() {}, &runtimeError{Code: networkCode(err), Stage: "tcp_connect", Retryable: true, Err: err}
+		}
+		return raw, func() {}, nil
+	}
+
+	jump := *cfg.Jump
+	jumpAddress := net.JoinHostPort(jump.Host, fmt.Sprintf("%d", jump.Port))
+	m.setState(ms, "connecting", "jump_host_connect", "正在连接 Jump Host "+jumpAddress, "", "")
+	rawJump, err := dialTCPContext(ms.ctx, jump.Host, jump.Port, jump.TimeoutSec, jump.KeepaliveSec)
+	if err != nil {
+		return nil, func() {}, &runtimeError{Code: "JUMP_HOST_CONNECT_FAILED", Stage: "jump_host_connect", Retryable: true, Err: err}
+	}
+
+	methods, closers, err := buildAuthMethods(jump.Auth, jump.Credentials)
+	if err != nil {
+		_ = rawJump.Close()
+		closeAuthClosers(closers)
+		return nil, func() {}, remapJumpAuthError(err)
+	}
+	defer closeAuthClosers(closers)
+
+	jumpClientConfig := &ssh.ClientConfig{
+		User: jump.Username, Auth: methods, Timeout: time.Duration(jump.TimeoutSec) * time.Second,
+		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+			return m.verifyHostKeyFor(ms, "jump", jump.Name, jump.Host, jump.Port, jumpAddress, key)
+		},
+	}
+	m.setState(ms, "connecting", "jump_host_handshake", "正在协商 Jump Host SSH 连接", "", "")
+	conn, chans, reqs, err := ssh.NewClientConn(rawJump, jumpAddress, jumpClientConfig)
+	if err != nil {
+		_ = rawJump.Close()
+		return nil, func() {}, classifyJumpHandshakeError(err)
+	}
+	jumpClient := ssh.NewClient(conn, chans, reqs)
+
+	m.setState(ms, "connecting", "jump_host_dial", "正在通过 Jump Host 连接目标 "+targetAddress, "", "")
+	targetRaw, err := dialThroughJump(ms.ctx, jumpClient, targetAddress, time.Duration(cfg.TimeoutSec)*time.Second)
+	if err != nil {
+		_ = jumpClient.Close()
+		return nil, func() {}, err
+	}
+	cleanup := func() {
+		_ = targetRaw.Close()
+		_ = jumpClient.Close()
+	}
+	return targetRaw, cleanup, nil
+}
+
 func (m *Manager) runOnce(ms *managedSession) (bool, error) {
 	cfg := ms.cfg
 	address := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port))
-	m.setState(ms, "connecting", "tcp_connect", "正在连接 "+address, "", "")
-	dialer := net.Dialer{Timeout: time.Duration(cfg.TimeoutSec) * time.Second}
-	if cfg.KeepaliveSec > 0 {
-		dialer.KeepAlive = time.Duration(cfg.KeepaliveSec) * time.Second
-	}
-	raw, err := dialer.DialContext(ms.ctx, "tcp", address)
+	raw, cleanupTransport, err := m.openTargetConn(ms, cfg, address)
 	if err != nil {
-		return false, &runtimeError{Code: networkCode(err), Stage: "tcp_connect", Retryable: true, Err: err}
+		return false, err
 	}
+	defer cleanupTransport()
+
 	methods, closers, err := buildAuthMethods(cfg.Auth, cfg.Credentials)
 	if err != nil {
 		_ = raw.Close()
@@ -643,18 +815,40 @@ func (m *Manager) runOnce(ms *managedSession) (bool, error) {
 }
 
 func (m *Manager) verifyHostKey(ms *managedSession, address string, key ssh.PublicKey) error {
+	return m.verifyHostKeyFor(ms, "target", ms.cfg.Name, ms.cfg.Host, ms.cfg.Port, address, key)
+}
+
+func (m *Manager) verifyHostKeyFor(ms *managedSession, scope, name, host string, port int, address string, key ssh.PublicKey) error {
+	stage := "host_key_verify"
+	authStage := "authenticate"
+	pendingMessage := "等待确认主机身份"
+	changedMessage := "主机身份已变化，连接已阻止"
+	authMessage := "正在验证用户身份"
+	if scope == "jump" {
+		stage = "jump_host_verify"
+		authStage = "jump_host_authenticate"
+		pendingMessage = "等待确认 Jump Host 身份"
+		changedMessage = "Jump Host 身份已变化，连接已阻止"
+		authMessage = "正在验证 Jump Host 身份"
+	}
+
 	status, previous, err := m.known.Check(address, key)
 	if err != nil {
-		return &runtimeError{Code: "HOST_KEY_STORE_FAILED", Stage: "host_key_verify", Err: err}
+		return &runtimeError{Code: "HOST_KEY_STORE_FAILED", Stage: stage, Err: err}
 	}
 	if status == "match" {
-		m.setState(ms, "authenticating", "authenticate", "正在验证用户身份", "", "")
+		if scope == "target" {
+			m.setState(ms, "authenticating", authStage, authMessage, "", "")
+		} else {
+			m.setState(ms, "connecting", authStage, authMessage, "", "")
+		}
 		return nil
 	}
+
 	kind := status
 	challenge := HostKeyChallenge{
-		ID: runtimeID("hostkey"), SessionID: ms.snapshot.ID, Kind: kind, Host: ms.cfg.Host, Port: ms.cfg.Port, Address: address,
-		Algorithm: key.Type(), Fingerprint: ssh.FingerprintSHA256(key),
+		ID: runtimeID("hostkey"), SessionID: ms.snapshot.ID, Kind: kind, Scope: scope, Name: name,
+		Host: host, Port: port, Address: address, Algorithm: key.Type(), Fingerprint: ssh.FingerprintSHA256(key),
 	}
 	if previous != nil {
 		challenge.PreviousFingerprint = previous.Fingerprint
@@ -664,35 +858,42 @@ func (m *Manager) verifyHostKey(ms *managedSession, address string, key ssh.Publ
 	m.pending[challenge.ID] = pending
 	m.mu.Unlock()
 	defer func() { m.mu.Lock(); delete(m.pending, challenge.ID); m.mu.Unlock() }()
+
 	if kind == "changed" {
-		m.setState(ms, "security_blocked", "host_key_verify", "主机身份已变化，连接已阻止", "HOST_KEY_CHANGED", "")
+		m.setState(ms, "security_blocked", stage, changedMessage, "HOST_KEY_CHANGED", "")
 	} else {
-		m.setState(ms, "host_key_pending", "host_key_verify", "等待确认主机身份", "HOST_KEY_UNKNOWN", "")
+		m.setState(ms, "host_key_pending", stage, pendingMessage, "HOST_KEY_UNKNOWN", "")
 	}
 	m.emitEvent(EventHostKey, challenge)
+
 	select {
 	case <-ms.ctx.Done():
 		return ms.ctx.Err()
 	case action := <-pending.response:
 		if kind == "changed" {
 			if action != "replace" {
-				return &runtimeError{Code: "HOST_KEY_CHANGED", Stage: "host_key_verify", Err: errHostKeyRejected}
+				return &runtimeError{Code: "HOST_KEY_CHANGED", Stage: stage, Err: errHostKeyRejected}
 			}
 			if err := m.known.Trust(address, key); err != nil {
-				return err
+				return &runtimeError{Code: "HOST_KEY_STORE_FAILED", Stage: stage, Err: err}
 			}
 		} else {
 			switch action {
 			case "trust_once":
 			case "trust_save", "replace":
 				if err := m.known.Trust(address, key); err != nil {
-					return err
+					return &runtimeError{Code: "HOST_KEY_STORE_FAILED", Stage: stage, Err: err}
 				}
 			default:
-				return &runtimeError{Code: "HOST_KEY_REJECTED", Stage: "host_key_verify", Err: errHostKeyRejected}
+				return &runtimeError{Code: "HOST_KEY_REJECTED", Stage: stage, Err: errHostKeyRejected}
 			}
 		}
-		m.setState(ms, "authenticating", "authenticate", "正在验证用户身份", "", "")
+
+		if scope == "target" {
+			m.setState(ms, "authenticating", authStage, authMessage, "", "")
+		} else {
+			m.setState(ms, "connecting", authStage, authMessage, "", "")
+		}
 		return nil
 	}
 }
@@ -783,6 +984,10 @@ func (s *managedSession) clearCredentials() {
 	s.mu.Lock()
 	s.cfg.Credentials.Password = ""
 	s.cfg.Credentials.Passphrase = ""
+	if s.cfg.Jump != nil {
+		s.cfg.Jump.Credentials.Password = ""
+		s.cfg.Jump.Credentials.Passphrase = ""
+	}
 	s.mu.Unlock()
 }
 
@@ -940,6 +1145,22 @@ func userMessage(err *runtimeError) string {
 		return "SSH Agent 不可用"
 	case "AUTH_METHOD_REJECTED", "AUTH_KEY_REJECTED":
 		return "身份验证失败"
+	case "JUMP_HOST_CONNECT_FAILED":
+		return "无法连接 Jump Host"
+	case "JUMP_HOST_PASSWORD_REQUIRED":
+		return "Jump Host 需要已保存密码"
+	case "JUMP_HOST_KEY_PASSPHRASE_REQUIRED":
+		return "Jump Host 私钥需要单独口令"
+	case "JUMP_HOST_AGENT_UNAVAILABLE":
+		return "Jump Host 的 SSH Agent 不可用"
+	case "JUMP_HOST_AUTH_FAILED":
+		return "Jump Host 身份验证失败"
+	case "JUMP_HOST_NEGOTIATION_FAILED":
+		return "Jump Host SSH 协商失败"
+	case "JUMP_HOST_TARGET_TIMEOUT":
+		return "通过 Jump Host 连接目标超时"
+	case "JUMP_HOST_TARGET_DIAL_FAILED":
+		return "Jump Host 无法连接目标主机"
 	case "HOST_KEY_CHANGED":
 		return "主机身份已变化，连接已阻止"
 	case "HOST_KEY_REJECTED":

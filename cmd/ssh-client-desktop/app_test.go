@@ -265,6 +265,63 @@ func TestDuplicateProfileNameAvoidsCollisions(t *testing.T) {
 	}
 }
 
+func TestStoredProfileConnectConfigResolvesJumpHostCredentials(t *testing.T) {
+	app, target := newCredentialTestApp(t)
+
+	jump := model.DefaultProfile()
+	jump.ID = "profile_jump"
+	jump.Name = "jump"
+	jump.Host = "10.0.0.10"
+	jump.Username = "jump-user"
+	jump.Auth.Mode = "password"
+	jump.Auth.CredentialRef = passwordCredentialRef(jump.ID)
+
+	target.Network.Mode = "jump_host"
+	target.Network.JumpProfileID = jump.ID
+
+	settings := model.DefaultSettings()
+	settings.Profiles = []model.ConnectionProfile{jump, target}
+	if err := app.store.Save(settings); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.secure.Put(jump.Auth.CredentialRef, []byte("jump-secret")); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := app.storedProfileConnectConfig(settings, target, sshclient.Credentials{Password: "target-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Jump == nil {
+		t.Fatal("jump config was not resolved")
+	}
+	if cfg.Jump.ProfileID != jump.ID || cfg.Jump.Host != jump.Host || cfg.Jump.Username != jump.Username {
+		t.Fatalf("unexpected jump config: %#v", cfg.Jump)
+	}
+	if cfg.Jump.Credentials.Password != "jump-secret" {
+		t.Fatalf("jump password was not loaded from secure storage")
+	}
+	if cfg.Credentials.Password != "target-secret" {
+		t.Fatalf("target credentials changed: %#v", cfg.Credentials)
+	}
+
+	jump.Auth.CredentialRef = ""
+	settings.Profiles[0] = jump
+	if _, err := app.storedProfileConnectConfig(settings, target, sshclient.Credentials{}); err == nil {
+		t.Fatal("expected missing saved jump password error")
+	}
+
+	jump.Network.Mode = "jump_host"
+	jump.Network.JumpProfileID = target.ID
+	settings.Profiles[0] = jump
+	if _, err := app.storedProfileConnectConfig(settings, target, sshclient.Credentials{}); err == nil {
+		t.Fatal("expected nested jump host rejection")
+	}
+	if err := settings.Validate(); err == nil {
+		t.Fatal("expected settings validation to reject nested jump host")
+	}
+}
+
 func TestBatchProfileOperations(t *testing.T) {
 	app, profileA := newCredentialTestApp(t)
 	profileA.Tags = []string{"ops"}

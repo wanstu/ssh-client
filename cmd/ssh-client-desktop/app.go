@@ -833,7 +833,11 @@ func (a *App) ConnectProfile(id string, credentials sshclient.Credentials, remem
 		credentials.Password = string(saved)
 	}
 
-	session, err := a.connectProfile(profile, credentials)
+	cfg, err := a.storedProfileConnectConfig(settings, profile, credentials)
+	if err != nil {
+		return sshclient.SessionSnapshot{}, err
+	}
+	session, err := a.sessions.Connect(cfg)
 	if err != nil {
 		return sshclient.SessionSnapshot{}, err
 	}
@@ -908,9 +912,68 @@ func (a *App) QuickConnect(req QuickConnectRequest) (sshclient.SessionSnapshot, 
 	return a.connectProfile(profile, sshclient.Credentials{Password: req.Password, Passphrase: req.Passphrase})
 }
 
+func (a *App) storedProfileConnectConfig(settings model.Settings, profile model.ConnectionProfile, credentials sshclient.Credentials) (sshclient.ConnectConfig, error) {
+	cfg := sshclient.ConnectConfig{
+		ProfileID: profile.ID, Name: profile.Name, Host: profile.Host, Port: profile.Port, Username: profile.Username,
+		Auth: profile.Auth, Terminal: profile.Terminal, Reconnect: profile.Reconnect,
+		TimeoutSec: profile.Network.TimeoutSec, KeepaliveSec: profile.Network.KeepaliveSec, Credentials: credentials,
+	}
+
+	switch profile.Network.Mode {
+	case "direct":
+		return cfg, nil
+	case "jump_host":
+		jump, err := findProfile(settings, profile.Network.JumpProfileID)
+		if err != nil {
+			return sshclient.ConnectConfig{}, fmt.Errorf("读取 Jump Host 配置失败：%w", err)
+		}
+		if jump.ID == profile.ID {
+			return sshclient.ConnectConfig{}, errors.New("连接不能把自己作为 Jump Host")
+		}
+		if jump.Network.Mode != "direct" {
+			return sshclient.ConnectConfig{}, fmt.Errorf("Jump Host %q 必须使用 Direct 网络模式；当前只支持单层 Jump Host", jump.Name)
+		}
+
+		jumpCredentials := sshclient.Credentials{}
+		switch jump.Auth.Mode {
+		case "password":
+			if jump.Auth.CredentialRef == "" {
+				return sshclient.ConnectConfig{}, fmt.Errorf("Jump Host %q 使用 Password，但没有已保存密码；请先直接连接该 Jump Host 并保存密码", jump.Name)
+			}
+			password, err := a.secure.Get(jump.Auth.CredentialRef)
+			if err != nil {
+				return sshclient.ConnectConfig{}, fmt.Errorf("读取 Jump Host %q 的已保存密码失败：%w", jump.Name, err)
+			}
+			jumpCredentials.Password = string(password)
+		case "auto":
+			if jump.Auth.CredentialRef != "" {
+				password, err := a.secure.Get(jump.Auth.CredentialRef)
+				if err != nil {
+					return sshclient.ConnectConfig{}, fmt.Errorf("读取 Jump Host %q 的已保存密码失败：%w", jump.Name, err)
+				}
+				jumpCredentials.Password = string(password)
+			}
+		case "private_key", "ssh_agent":
+		default:
+			return sshclient.ConnectConfig{}, fmt.Errorf("Jump Host %q 使用了不支持的认证模式 %q", jump.Name, jump.Auth.Mode)
+		}
+
+		cfg.Jump = &sshclient.JumpConfig{
+			ProfileID: jump.ID, Name: jump.Name, Host: jump.Host, Port: jump.Port, Username: jump.Username,
+			Auth: jump.Auth, TimeoutSec: jump.Network.TimeoutSec, KeepaliveSec: jump.Network.KeepaliveSec,
+			Credentials: jumpCredentials,
+		}
+		return cfg, nil
+	case "socks5":
+		return sshclient.ConnectConfig{}, errors.New("SOCKS5 Runtime 将在下一批接入")
+	default:
+		return sshclient.ConnectConfig{}, fmt.Errorf("不支持的网络模式 %q", profile.Network.Mode)
+	}
+}
+
 func profileConnectConfig(profile model.ConnectionProfile, credentials sshclient.Credentials) (sshclient.ConnectConfig, error) {
 	if profile.Network.Mode != "direct" {
-		return sshclient.ConnectConfig{}, fmt.Errorf("%s 网络模式将在后续阶段接入；当前 Runtime 只允许 Direct", profile.Network.Mode)
+		return sshclient.ConnectConfig{}, fmt.Errorf("%s 网络模式需要持久化 Profile 上下文；Quick Connect 当前只允许 Direct", profile.Network.Mode)
 	}
 	return sshclient.ConnectConfig{
 		ProfileID: profile.ID, Name: profile.Name, Host: profile.Host, Port: profile.Port, Username: profile.Username,
@@ -977,7 +1040,7 @@ func (a *App) ReconnectProfileSession(id string, credentials sshclient.Credentia
 		credentials.Password = string(saved)
 	}
 
-	cfg, err := profileConnectConfig(profile, credentials)
+	cfg, err := a.storedProfileConnectConfig(settings, profile, credentials)
 	if err != nil {
 		return sshclient.SessionSnapshot{}, err
 	}

@@ -136,13 +136,16 @@
 
 ## 10. Jump Host
 
-- 目标 Profile 只引用 jump_profile_id。
-- Jump Host 不存在时目标连接不可静默 Direct fallback。
-- Jump Host Host Key 先验证。
-- Jump Host Auth 先完成。
-- 目标 Host Key 与目标 Auth 独立执行。
-- UI 能定位错误发生在 Bastion 还是 Target。
-- 第一阶段只允许一层 Jump Host。
+- 目标 Profile 只引用 `jump_profile_id`；Desktop Profile 编辑页提供 Direct / Jump Host 网络模式、Jump Profile、Timeout、Keepalive 配置，不要求手改 Settings。
+- Jump Host 不存在时目标连接不可静默 Direct fallback；引用的 Jump Profile 必须存在且使用 Direct 网络模式。
+- Jump Host Host Key 先验证，Host Key challenge 的 `scope=jump`；目标 Host Key 使用 `scope=target`，两者分别保存/信任。
+- Jump Host Auth 先完成，再通过 SSH `direct-tcpip` Channel 连接目标地址；目标 Host Key 与目标 Auth 独立执行。
+- Jump Host Password 只从 Jump Profile 自己的安全 credential_ref 读取，不得复用目标 Profile 密码；没有已保存密码时在创建 Session 前明确报错。
+- Jump Host 支持 Password（已保存）、SSH Agent、无口令 Private Key 与 Auto。加密 Jump 私钥需要单独 Passphrase 时必须明确报错，当前批次不猜测或复用目标 Passphrase。
+- UI Host Key 对话框与 Session state/message 能定位错误发生在 Jump Host 还是 Target；Jump 连接、握手、认证、目标转发使用独立 stage / reason message。
+- Session 最终结束时同时清除目标 Credentials 与 Jump Credentials 的运行时副本。
+- 第一阶段只允许一层 Jump Host；Settings 校验禁止 Jump Profile 自身再使用 Jump Host。
+- Runtime 必须有真实集成测试覆盖 `Local → Jump SSH → direct-tcpip → Target SSH → PTY/Shell`，而不只是配置对象测试。
 
 ## 11. Reconnect
 

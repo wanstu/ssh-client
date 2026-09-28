@@ -3443,6 +3443,7 @@ async function connectProfileNow(profile, credentials, rememberPassword = false)
     errorBox.textContent = String(error);
     errorBox.classList.remove("is-hidden");
     hint.textContent = "连接尚未开始，请检查配置后重试。";
+    if (!dialog.open) showToast("连接未开始：" + error);
     return false;
   } finally {
     button.disabled = false;
@@ -3472,10 +3473,41 @@ async function reconnectProfileNow(profile, sessionId, credentials, rememberPass
     errorBox.textContent = String(error);
     errorBox.classList.remove("is-hidden");
     hint.textContent = "重新连接尚未开始，请检查认证信息后重试。";
+    if (!dialog.open) showToast("重新连接未开始：" + error);
     return false;
   } finally {
     button.disabled = false;
     button.textContent = "连接";
+  }
+}
+
+function refreshJumpProfileOptions(selectedId = "", currentProfileId = "") {
+  const select = $("#profileJumpHost");
+  select.replaceChildren(new Option("请选择 Jump Host", ""));
+  for (const profile of state.settings.profiles || []) {
+    if (profile.id === currentProfileId) continue;
+    const direct = !profile.network || profile.network.mode === "direct";
+    const option = new Option(profile.name + (direct ? "" : " · 非 Direct"), profile.id);
+    option.disabled = !direct;
+    select.add(option);
+  }
+  if ([...select.options].some((option) => option.value === selectedId)) {
+    select.value = selectedId;
+  } else {
+    select.value = "";
+  }
+}
+
+function updateProfileNetworkFields() {
+  const mode = $("#profileNetworkMode").value;
+  $("#profileJumpHostField").classList.toggle("is-hidden", mode !== "jump_host");
+  const note = $("#profileNetworkNote");
+  if (mode === "jump_host") {
+    note.textContent = "只支持单层 Jump Host。Jump Profile 本身必须是 Direct；Password 认证需先在 Jump Profile 中保存密码。";
+  } else if (mode === "socks5") {
+    note.textContent = "SOCKS5 Runtime 尚未接入，本批只开放 Direct 与 Jump Host。";
+  } else {
+    note.textContent = "Direct：客户端直接连接目标 SSH 主机。";
   }
 }
 
@@ -3490,6 +3522,10 @@ function openProfileDialog(profile = null) {
   $("#profileAuthMode").value = editing ? profile.auth.mode : "auto";
   $("#profilePrivateKey").value = editing ? profile.auth.private_key_path || "" : "";
   $("#profileTags").value = editing ? (profile.tags || []).join(", ") : "";
+  const network = { mode: "direct", timeout_sec: 10, keepalive_sec: 30, ...((editing && profile.network) || {}) };
+  $("#profileNetworkMode").value = network.mode;
+  $("#profileTimeoutSec").value = network.timeout_sec;
+  $("#profileKeepaliveSec").value = network.keepalive_sec;
   const terminal = { ...DEFAULT_TERMINAL_CONFIG, ...((editing && profile.terminal) || {}) };
   $("#profileTerminalTerm").value = terminal.term;
   $("#profileTerminalEncoding").value = terminal.encoding;
@@ -3501,8 +3537,10 @@ function openProfileDialog(profile = null) {
   $("#deleteProfileButton").classList.toggle("is-hidden", !editing);
 
   refreshProfileGroupOptions(editing ? profile.group_id || "" : "");
+  refreshJumpProfileOptions(network.jump_profile_id || "", editing ? profile.id : "");
 
   updatePrivateKeyVisibility();
+  updateProfileNetworkFields();
   $("#profileDialog").showModal();
 }
 
@@ -3662,7 +3700,14 @@ function profileFromForm() {
       private_key_path: $("#profilePrivateKey").value.trim(),
       credential_ref: existing && existing.auth ? existing.auth.credential_ref || "" : ""
     },
-    network: existing && existing.network ? existing.network : { mode: "direct", timeout_sec: 10, keepalive_sec: 30 },
+    network: {
+      mode: $("#profileNetworkMode").value,
+      jump_profile_id: $("#profileNetworkMode").value === "jump_host" ? $("#profileJumpHost").value : "",
+      socks5_host: existing && existing.network ? existing.network.socks5_host || "" : "",
+      socks5_port: existing && existing.network ? existing.network.socks5_port || 0 : 0,
+      timeout_sec: Number($("#profileTimeoutSec").value || 10),
+      keepalive_sec: Number($("#profileKeepaliveSec").value || 0)
+    },
     terminal: {
       term: $("#profileTerminalTerm").value.trim() || DEFAULT_TERMINAL_CONFIG.term,
       encoding: $("#profileTerminalEncoding").value.trim() || DEFAULT_TERMINAL_CONFIG.encoding,
@@ -3680,6 +3725,12 @@ function profileFromForm() {
 async function saveProfile() {
   const profile = profileFromForm();
   const errorBox = $("#profileError");
+  errorBox.classList.add("is-hidden");
+  if (profile.network.mode === "jump_host" && !profile.network.jump_profile_id) {
+    errorBox.textContent = "请选择一个 Direct Connection Profile 作为 Jump Host";
+    errorBox.classList.remove("is-hidden");
+    return;
+  }
   try {
     const next = profile.id ? await UpdateProfile(profile) : await CreateProfile(profile);
     state.settings = next.settings;
@@ -3917,10 +3968,13 @@ async function importSelectedSSHConfig() {
 function showHostKeyChallenge(challenge) {
   state.pendingHostKey = challenge;
   const changed = challenge.kind === "changed";
-  $("#hostKeyTitle").textContent = changed ? "主机身份已变化" : "确认主机身份";
+  const isJump = challenge.scope === "jump";
+  const role = isJump ? "Jump Host" : "目标主机";
+  const displayName = challenge.name ? "“" + challenge.name + "”" : challenge.address;
+  $("#hostKeyTitle").textContent = changed ? role + "身份已变化" : "确认" + role + "身份";
   $("#hostKeyDescription").textContent = changed
-    ? challenge.address + " 返回了与历史记录不同的主机密钥。连接已阻止。"
-    : "这是第一次连接到 " + challenge.address + "，请核对主机指纹。";
+    ? role + " " + displayName + "（" + challenge.address + "）返回了与历史记录不同的主机密钥。连接已阻止。"
+    : "这是第一次连接到" + role + " " + displayName + "（" + challenge.address + "），请核对主机指纹。";
   $("#hostKeyFingerprint").textContent = challenge.algorithm + " · " + challenge.fingerprint;
   $("#previousFingerprintBox").classList.toggle("is-hidden", !changed);
   $("#hostKeyPreviousFingerprint").textContent = challenge.previous_fingerprint || "";
@@ -4679,6 +4733,7 @@ function bindEvents() {
   $("#deleteSnippetButton").addEventListener("click", deleteSelectedSnippet);
 
   $("#profileAuthMode").addEventListener("change", updatePrivateKeyVisibility);
+  $("#profileNetworkMode").addEventListener("change", updateProfileNetworkFields);
   $("#profileForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     await saveProfile();

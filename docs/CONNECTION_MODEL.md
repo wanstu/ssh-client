@@ -96,9 +96,11 @@ Local
   → prod-db-01
 ```
 
-第一阶段最多支持一层 Jump Host 可以显著降低实现复杂度。
+第一阶段最多支持一层 Jump Host。当前 Desktop 编辑页直接选择已有 Direct Connection Profile 作为 Jump Host；Runtime 先建立并验证 Jump SSH，再使用 `direct-tcpip` Channel 到目标地址，随后对目标主机重新执行独立 Host Key 与认证流程。
 
-多级 ProxyJump 后续扩展。
+Jump Password 从 Jump Profile 自己的安全凭据引用读取，不复制进目标 Profile，也不会复用目标密码。SSH Agent 与无口令 Private Key 可直接使用；需要单独 Passphrase 的加密 Jump 私钥当前明确失败，后续再增加双凭据交互。
+
+多级 ProxyJump 后续扩展；Settings 当前拒绝 Jump Profile 再引用另一层 Jump Host。
 
 ## 7. TerminalConfig
 
