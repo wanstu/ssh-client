@@ -46,9 +46,11 @@
 - Username 可搜索。
 - Group 可搜索。
 - Tag 可搜索。
-- 无结果显示空状态。
-- 清除筛选恢复全部连接。
-- 搜索与筛选组合行为要稳定。
+- 无结果显示空状态，并明确区分“没有连接”和“搜索或筛选没有结果”。
+- 连接筛选支持状态 / Group / Tag / Auth method 四个维度，可同时组合；Group / Tag 选项随当前 Settings 动态更新。
+- 状态筛选至少区分 connected / connecting / reconnecting / disconnected / failed（含 security_blocked）/ offline（当前运行期无 Session）。
+- 清除筛选恢复全部连接；筛选仅为前端运行时展示状态，不写入 Profile Settings。
+- 搜索与筛选取交集，组合行为要稳定；筛选按钮显示当前启用条件数量。
 
 ## 4. Batch Mode
 

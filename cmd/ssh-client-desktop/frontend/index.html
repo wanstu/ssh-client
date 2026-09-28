@@ -42,7 +42,31 @@
       </div>
     </header>
     <div class="sidebar-search">
-      <input id="connectionSearch" type="search" placeholder="搜索名称、地址、用户或标签">
+      <div class="sidebar-search-row">
+        <input id="connectionSearch" type="search" placeholder="搜索名称、地址、用户或标签">
+        <button id="profileFilterToggleButton" class="sidebar-filter-toggle" type="button" title="连接筛选" aria-expanded="false">筛选</button>
+      </div>
+      <div id="profileFilterPanel" class="connection-filter-panel is-hidden">
+        <select id="profileStatusFilter" aria-label="连接状态筛选">
+          <option value="">全部状态</option>
+          <option value="connected">已连接</option>
+          <option value="connecting">连接中</option>
+          <option value="reconnecting">重连中</option>
+          <option value="disconnected">已断开</option>
+          <option value="failed">失败 / 安全阻止</option>
+          <option value="offline">从未连接</option>
+        </select>
+        <select id="profileGroupFilter" aria-label="连接分组筛选"><option value="">全部分组</option></select>
+        <select id="profileTagFilter" aria-label="连接标签筛选"><option value="">全部标签</option></select>
+        <select id="profileAuthFilter" aria-label="认证方式筛选">
+          <option value="">全部认证</option>
+          <option value="auto">Auto</option>
+          <option value="password">Password</option>
+          <option value="private_key">Private Key</option>
+          <option value="ssh_agent">SSH Agent</option>
+        </select>
+        <button id="clearProfileFiltersButton" class="dk-button dk-button-ghost compact-button filter-clear-button" type="button">清除筛选</button>
+      </div>
     </div>
     <div id="connectionList" class="connection-list"></div>
     <footer class="sidebar-footer">

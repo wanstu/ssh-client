@@ -73,6 +73,8 @@ const state = {
   launchAtLoginSupported: false,
   dataDir: "",
   search: "",
+  profileFiltersOpen: false,
+  profileFilters: { status: "", group: "", tag: "", auth: "" },
   sidebarCollapsed: false,
   terminalContextSelection: "",
   profileContextId: "",
@@ -2248,6 +2250,82 @@ function renderAll() {
   renderActiveSession();
 }
 
+function profileFilterStatus(profileId) {
+  const sessions = state.sessions.filter((session) => session.profile_id === profileId);
+  if (!sessions.length) return "offline";
+  if (sessions.some((session) => session.state === "connected")) return "connected";
+  if (sessions.some((session) => session.state === "reconnecting")) return "reconnecting";
+  if (sessions.some((session) => ["connecting", "authenticating", "host_key_pending"].includes(session.state))) return "connecting";
+  const latest = sessions[sessions.length - 1].state || "offline";
+  if (["failed", "security_blocked"].includes(latest)) return "failed";
+  if (latest === "disconnected") return "disconnected";
+  return latest;
+}
+
+function activeProfileFilterCount() {
+  return Object.values(state.profileFilters).filter(Boolean).length;
+}
+
+function refreshProfileFilterOptions() {
+  const profiles = state.settings.profiles || [];
+  const groups = state.settings.groups || [];
+  const groupSelect = $("#profileGroupFilter");
+  const tagSelect = $("#profileTagFilter");
+
+  groupSelect.replaceChildren(new Option("全部分组", ""));
+  for (const group of groups) groupSelect.add(new Option(group.name, group.id));
+  if (profiles.some((profile) => !profile.group_id)) groupSelect.add(new Option("未分组", "__ungrouped"));
+
+  const tags = new Map();
+  for (const profile of profiles) {
+    for (const tag of profile.tags || []) {
+      const value = String(tag || "").trim();
+      if (value && !tags.has(value.toLowerCase())) tags.set(value.toLowerCase(), value);
+    }
+  }
+  tagSelect.replaceChildren(new Option("全部标签", ""));
+  [...tags.values()].sort((a, b) => a.localeCompare(b, "zh-CN")).forEach((tag) => tagSelect.add(new Option(tag, tag)));
+
+  const groupValues = new Set([...groupSelect.options].map((option) => option.value));
+  if (!groupValues.has(state.profileFilters.group)) state.profileFilters.group = "";
+  const tagValues = new Set([...tagSelect.options].map((option) => option.value));
+  if (!tagValues.has(state.profileFilters.tag)) state.profileFilters.tag = "";
+
+  $("#profileStatusFilter").value = state.profileFilters.status;
+  groupSelect.value = state.profileFilters.group;
+  tagSelect.value = state.profileFilters.tag;
+  $("#profileAuthFilter").value = state.profileFilters.auth;
+
+  const count = activeProfileFilterCount();
+  const toggle = $("#profileFilterToggleButton");
+  toggle.textContent = count ? "筛选 · " + count : "筛选";
+  toggle.classList.toggle("is-active", count > 0);
+  toggle.setAttribute("aria-expanded", String(state.profileFiltersOpen));
+}
+
+function profileMatchesFilters(profile) {
+  const filters = state.profileFilters;
+  if (filters.status && profileFilterStatus(profile.id) !== filters.status) return false;
+  if (filters.group) {
+    if (filters.group === "__ungrouped") {
+      if (profile.group_id) return false;
+    } else if (profile.group_id !== filters.group) {
+      return false;
+    }
+  }
+  if (filters.tag) {
+    const wanted = filters.tag.toLowerCase();
+    if (!(profile.tags || []).some((tag) => String(tag).toLowerCase() === wanted)) return false;
+  }
+  if (filters.auth && (profile.auth && profile.auth.mode || "auto") !== filters.auth) return false;
+  return true;
+}
+
+function clearProfileFilters() {
+  state.profileFilters = { status: "", group: "", tag: "", auth: "" };
+  renderSidebar();
+}
+
 function renderSidebar() {
   const title = $("#sidebarTitle");
   const meta = $("#sidebarMeta");
@@ -2259,6 +2337,9 @@ function renderSidebar() {
   $("#importConfigButton").classList.toggle("is-hidden", !connectionsNav);
   $("#newProfileButton").classList.toggle("is-hidden", !connectionsNav);
   $("#newSnippetButton").classList.toggle("is-hidden", state.nav !== "snippets");
+  $("#profileFilterToggleButton").classList.toggle("is-hidden", !connectionsNav);
+  $("#profileFilterPanel").classList.toggle("is-hidden", !connectionsNav || !state.profileFiltersOpen);
+  if (connectionsNav) refreshProfileFilterOptions();
 
   search.placeholder = state.nav === "history"
     ? "搜索命令或目标主机"
@@ -2309,15 +2390,19 @@ function renderSidebar() {
 
   title.textContent = "连接";
   const profiles = state.settings.profiles || [];
-  meta.textContent = String(profiles.length) + " 个主机 · " + String(state.sessions.filter((s) => s.state === "connected").length) + " 个已连接";
-
   const query = state.search.trim().toLowerCase();
+  const filterCount = activeProfileFilterCount();
   const filtered = profiles.filter((profile) => {
+    if (!profileMatchesFilters(profile)) return false;
     if (!query) return true;
     const group = (state.settings.groups || []).find((item) => item.id === profile.group_id);
     const text = [profile.name, profile.host, profile.username, group && group.name, ...(profile.tags || [])].filter(Boolean).join(" ").toLowerCase();
     return text.includes(query);
   });
+  const connectedCount = state.sessions.filter((s) => s.state === "connected").length;
+  meta.textContent = query || filterCount
+    ? String(filtered.length) + " / " + String(profiles.length) + " 个主机 · " + String(filterCount) + " 个筛选"
+    : String(profiles.length) + " 个主机 · " + String(connectedCount) + " 个已连接";
 
   const groups = [];
   const favorites = filtered.filter((profile) => profile.favorite);
@@ -2333,9 +2418,12 @@ function renderSidebar() {
   if (!groups.length) {
     const empty = document.createElement("div");
     empty.className = "dk-empty-state";
-    empty.innerHTML = profiles.length
-      ? "<div><strong>没有匹配的连接</strong><p>尝试搜索名称、Host、用户、分组或标签。</p></div>"
-      : "<div><strong>还没有连接</strong><p>点击右上角 ＋ 创建第一个 SSH Connection Profile。</p></div>";
+    if (profiles.length) {
+      const filterHint = filterCount ? "当前启用了 " + filterCount + " 个筛选条件；可点击“清除筛选”恢复全部连接。" : "尝试搜索名称、Host、用户、分组或标签。";
+      empty.innerHTML = "<div><strong>搜索或筛选没有结果</strong><p>" + filterHint + "</p></div>";
+    } else {
+      empty.innerHTML = "<div><strong>还没有连接</strong><p>点击右上角 ＋ 创建第一个 SSH Connection Profile。</p></div>";
+    }
     list.append(empty);
     return;
   }
@@ -4366,6 +4454,22 @@ function bindEvents() {
     state.search = event.target.value;
     renderSidebar();
   });
+  $("#profileFilterToggleButton").addEventListener("click", () => {
+    state.profileFiltersOpen = !state.profileFiltersOpen;
+    renderSidebar();
+  });
+  for (const [id, key] of [
+    ["#profileStatusFilter", "status"],
+    ["#profileGroupFilter", "group"],
+    ["#profileTagFilter", "tag"],
+    ["#profileAuthFilter", "auth"]
+  ]) {
+    $(id).addEventListener("change", (event) => {
+      state.profileFilters[key] = event.target.value;
+      renderSidebar();
+    });
+  }
+  $("#clearProfileFiltersButton").addEventListener("click", clearProfileFilters);
 
   $("#sessionRenameForm").addEventListener("submit", (event) => {
     event.preventDefault();

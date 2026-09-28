@@ -208,6 +208,65 @@ button, input, select {
   box-shadow: 0 0 0 3px var(--dk-focus-ring);
 }
 
+.sidebar-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.sidebar-filter-toggle {
+  min-width: 58px;
+  height: 38px;
+  border: 1px solid color-mix(in srgb, var(--dk-border) 68%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--dk-bg-app) 84%, var(--dk-bg-elevated));
+  color: var(--dk-text-secondary);
+  padding: 0 10px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sidebar-filter-toggle:hover,
+.sidebar-filter-toggle.is-active {
+  border-color: color-mix(in srgb, var(--dk-primary) 64%, var(--dk-border));
+  color: var(--dk-primary);
+  background: color-mix(in srgb, var(--dk-primary) 10%, var(--dk-bg-app));
+}
+
+.connection-filter-panel {
+  margin-top: 8px;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--dk-border) 72%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--dk-bg-elevated) 72%, var(--dk-bg-app));
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.connection-filter-panel select {
+  min-width: 0;
+  height: 32px;
+  border: 1px solid var(--dk-border);
+  border-radius: 8px;
+  background: var(--dk-bg-app);
+  color: var(--dk-text);
+  padding: 0 8px;
+  font-size: 10px;
+  outline: none;
+}
+
+.connection-filter-panel select:focus {
+  border-color: var(--dk-primary);
+  box-shadow: 0 0 0 2px var(--dk-focus-ring);
+}
+
+.filter-clear-button {
+  grid-column: 1 / -1;
+  justify-self: end;
+}
+
 .connection-list {
   min-height: 0;
   overflow: auto;
