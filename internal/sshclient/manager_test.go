@@ -22,14 +22,32 @@ func TestCloneConnectConfigCopiesJumpCredentials(t *testing.T) {
 	original := ConnectConfig{
 		Credentials: Credentials{Password: "target"},
 		Jump:        &JumpConfig{ProfileID: "jump", Credentials: Credentials{Password: "jump"}},
+		SOCKS5:      &SOCKS5Config{Host: "127.0.0.1", Port: 1080},
 	}
 	cloned := cloneConnectConfig(original)
 	if cloned.Jump == original.Jump {
 		t.Fatal("jump config pointer was shared")
 	}
+	if cloned.SOCKS5 == original.SOCKS5 {
+		t.Fatal("SOCKS5 config pointer was shared")
+	}
 	cloned.Jump.Credentials.Password = ""
+	cloned.SOCKS5.Host = "changed"
 	if original.Jump.Credentials.Password != "jump" {
 		t.Fatal("clearing cloned jump credentials mutated original config")
+	}
+	if original.SOCKS5.Host != "127.0.0.1" {
+		t.Fatal("changing cloned SOCKS5 config mutated original config")
+	}
+}
+
+func TestNormalizeSOCKS5RejectsJumpCombination(t *testing.T) {
+	cfg := ConnectConfig{
+		Jump:   &JumpConfig{Host: "jump", Port: 22, Username: "root"},
+		SOCKS5: &SOCKS5Config{Host: "127.0.0.1", Port: 1080},
+	}
+	if err := normalizeSOCKS5Config(&cfg); err == nil {
+		t.Fatal("expected jump host and SOCKS5 combination to be rejected")
 	}
 }
 
@@ -111,6 +129,131 @@ func TestManagerDirectPasswordSession(t *testing.T) {
 
 	if err := manager.Disconnect(session.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSOCKS5AddressPreservesDomainName(t *testing.T) {
+	request, err := socks5Address("internal.example", 22)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(request) < 7 {
+		t.Fatalf("SOCKS5 request too short: %x", request)
+	}
+	if request[0] != 0x05 || request[1] != 0x01 || request[2] != 0x00 || request[3] != 0x03 {
+		t.Fatalf("unexpected SOCKS5 request header: %x", request[:4])
+	}
+	nameLen := int(request[4])
+	if got := string(request[5 : 5+nameLen]); got != "internal.example" {
+		t.Fatalf("domain = %q", got)
+	}
+	if request[len(request)-2] != 0 || request[len(request)-1] != 22 {
+		t.Fatalf("port bytes = %x", request[len(request)-2:])
+	}
+}
+
+func TestManagerSOCKS5PasswordSession(t *testing.T) {
+	targetAddr, stopTarget := startTestSSHServer(t)
+	defer stopTarget()
+	proxyAddr, stopProxy := startTestSOCKS5Server(t)
+	defer stopProxy()
+
+	targetHost, targetPortText, err := net.SplitHostPort(targetAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetPort, err := strconv.Atoi(targetPortText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyHost, proxyPortText, err := net.SplitHostPort(proxyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyPort, err := strconv.Atoi(proxyPortText)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var manager *Manager
+	events := make(chan any, 128)
+	scopes := make(chan string, 4)
+	manager = NewManager(t.TempDir(), func(event string, payload any) {
+		switch event {
+		case EventHostKey:
+			challenge := payload.(HostKeyChallenge)
+			scopes <- challenge.Scope
+			if err := manager.ResolveHostKey(challenge.ID, "trust_once"); err != nil {
+				t.Errorf("resolve host key: %v", err)
+			}
+		case EventSessionState, EventOutput:
+			events <- payload
+		}
+	})
+
+	profile := model.DefaultProfile()
+	session, err := manager.Connect(ConnectConfig{
+		Name:        "socks-target",
+		Host:        targetHost,
+		Port:        targetPort,
+		Username:    "tester",
+		Auth:        model.AuthConfig{Mode: "password"},
+		Terminal:    profile.Terminal,
+		Reconnect:   model.ReconnectConfig{Enabled: false, KeepTabOnDisconnect: true},
+		TimeoutSec:  3,
+		Credentials: Credentials{Password: "secret"},
+		SOCKS5:      &SOCKS5Config{Host: proxyHost, Port: proxyPort},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Disconnect(session.ID)
+
+	connected := false
+	echoed := false
+	sawProxyStage := false
+	deadline := time.After(5 * time.Second)
+	for !(connected && echoed && sawProxyStage) {
+		select {
+		case payload := <-events:
+			switch value := payload.(type) {
+			case SessionSnapshot:
+				if value.ID != session.ID {
+					continue
+				}
+				if value.Stage == "socks5_connect" || value.Stage == "socks5_handshake" {
+					sawProxyStage = true
+				}
+				if value.State == "connected" && !connected {
+					connected = true
+					if err := manager.Write(session.ID, "socks-ok\r"); err != nil {
+						t.Fatal(err)
+					}
+				}
+			case OutputEvent:
+				if value.SessionID != session.ID {
+					continue
+				}
+				data, err := base64.StdEncoding.DecodeString(value.DataBase64)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(data), "socks-ok") {
+					echoed = true
+				}
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for SOCKS5 session: connected=%v echoed=%v proxyStage=%v", connected, echoed, sawProxyStage)
+		}
+	}
+
+	select {
+	case scope := <-scopes:
+		if scope != "target" {
+			t.Fatalf("host key scope = %q, want target", scope)
+		}
+	default:
+		t.Fatal("expected target host key challenge")
 	}
 }
 
@@ -433,6 +576,118 @@ func TestEncodeTerminalInput(t *testing.T) {
 	if _, err := encodeTerminalInput("test", "not-a-real-encoding"); err == nil {
 		t.Fatal("expected unsupported encoding error")
 	}
+}
+
+func startTestSOCKS5Server(t *testing.T) (string, func()) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				select {
+				case <-done:
+					return
+				default:
+					return
+				}
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				handleTestSOCKS5Conn(conn)
+			}()
+		}
+	}()
+
+	stop := func() {
+		close(done)
+		_ = listener.Close()
+		wg.Wait()
+	}
+	return listener.Addr().String(), stop
+}
+
+func handleTestSOCKS5Conn(conn net.Conn) {
+	defer conn.Close()
+
+	greeting := make([]byte, 3)
+	if _, err := io.ReadFull(conn, greeting); err != nil {
+		return
+	}
+	if greeting[0] != 0x05 || greeting[1] != 0x01 || greeting[2] != 0x00 {
+		_, _ = conn.Write([]byte{0x05, 0xff})
+		return
+	}
+	if _, err := conn.Write([]byte{0x05, 0x00}); err != nil {
+		return
+	}
+
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return
+	}
+	if header[0] != 0x05 || header[1] != 0x01 {
+		return
+	}
+
+	var host string
+	switch header[3] {
+	case 0x01:
+		raw := make([]byte, 4)
+		if _, err := io.ReadFull(conn, raw); err != nil {
+			return
+		}
+		host = net.IP(raw).String()
+	case 0x04:
+		raw := make([]byte, 16)
+		if _, err := io.ReadFull(conn, raw); err != nil {
+			return
+		}
+		host = net.IP(raw).String()
+	case 0x03:
+		length := []byte{0}
+		if _, err := io.ReadFull(conn, length); err != nil {
+			return
+		}
+		raw := make([]byte, int(length[0]))
+		if _, err := io.ReadFull(conn, raw); err != nil {
+			return
+		}
+		host = string(raw)
+	default:
+		_, _ = conn.Write([]byte{0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		return
+	}
+
+	portBytes := make([]byte, 2)
+	if _, err := io.ReadFull(conn, portBytes); err != nil {
+		return
+	}
+	port := int(portBytes[0])<<8 | int(portBytes[1])
+	upstream, err := net.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		_, _ = conn.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		return
+	}
+	defer upstream.Close()
+
+	if _, err := conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 0}); err != nil {
+		return
+	}
+
+	copyDone := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(conn, upstream); copyDone <- struct{}{} }()
+	go func() { _, _ = io.Copy(upstream, conn); copyDone <- struct{}{} }()
+	<-copyDone
 }
 
 func startTestSSHServer(t *testing.T) (string, func()) {

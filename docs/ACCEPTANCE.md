@@ -147,6 +147,15 @@
 - 第一阶段只允许一层 Jump Host；Settings 校验禁止 Jump Profile 自身再使用 Jump Host。
 - Runtime 必须有真实集成测试覆盖 `Local → Jump SSH → direct-tcpip → Target SSH → PTY/Shell`，而不只是配置对象测试。
 
+## 10.1 SOCKS5
+
+- Desktop Profile 编辑页可选择 SOCKS5，并配置代理 Host / Port、目标连接 Timeout 与 Keepalive；无需手改 Settings。
+- 当前 SOCKS5 仅支持 RFC 1928 NO AUTH（method `0x00`），不保存、请求或发送代理用户名密码；需要认证的代理必须明确失败。
+- Runtime 先建立到 SOCKS5 Proxy 的 TCP 连接，完成 method negotiation 和 CONNECT，再在该 tunnel 上执行目标 SSH Host Key / Auth / PTY / Shell；代理本身不是 SSH Host，不产生 Host Key challenge。
+- 目标为域名时应使用 SOCKS5 DOMAINNAME 地址类型交给代理解析，不强制在本机预解析。
+- SOCKS5 连接和握手分别使用 `socks5_connect` / `socks5_handshake` stage，并给出可定位的失败消息。
+- Jump Host 与 SOCKS5 不能同时启用；Runtime 配置校验必须拒绝两者并存。
+- Runtime 必须有真实集成测试覆盖 `Local → SOCKS5 CONNECT → Target SSH → PTY/Shell`，并验证输入输出可正常往返。
 ## 11. Reconnect
 
 - 网络中断保留输出。

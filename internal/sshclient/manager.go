@@ -84,11 +84,32 @@ func normalizeJumpConfig(cfg *ConnectConfig) error {
 	return nil
 }
 
+func normalizeSOCKS5Config(cfg *ConnectConfig) error {
+	if cfg.Jump != nil && cfg.SOCKS5 != nil {
+		return errors.New("jump host and SOCKS5 cannot be enabled at the same time")
+	}
+	if cfg.SOCKS5 == nil {
+		return nil
+	}
+	cfg.SOCKS5.Host = strings.TrimSpace(cfg.SOCKS5.Host)
+	if cfg.SOCKS5.Host == "" {
+		return errors.New("SOCKS5 host is required")
+	}
+	if cfg.SOCKS5.Port < 1 || cfg.SOCKS5.Port > 65535 {
+		return errors.New("SOCKS5 port must be between 1 and 65535")
+	}
+	return nil
+}
+
 func cloneConnectConfig(cfg ConnectConfig) ConnectConfig {
 	cloned := cfg
 	if cfg.Jump != nil {
 		jumpCopy := *cfg.Jump
 		cloned.Jump = &jumpCopy
+	}
+	if cfg.SOCKS5 != nil {
+		socksCopy := *cfg.SOCKS5
+		cloned.SOCKS5 = &socksCopy
 	}
 	return cloned
 }
@@ -108,6 +129,9 @@ func (m *Manager) Connect(cfg ConnectConfig) (SessionSnapshot, error) {
 		return SessionSnapshot{}, errors.New("port must be between 1 and 65535")
 	}
 	if err := normalizeJumpConfig(&cfg); err != nil {
+		return SessionSnapshot{}, err
+	}
+	if err := normalizeSOCKS5Config(&cfg); err != nil {
 		return SessionSnapshot{}, err
 	}
 	if cfg.TimeoutSec <= 0 {
@@ -395,6 +419,9 @@ func (m *Manager) ReconnectSession(sessionID string, cfg ConnectConfig) (Session
 	if err := normalizeJumpConfig(&cfg); err != nil {
 		return SessionSnapshot{}, err
 	}
+	if err := normalizeSOCKS5Config(&cfg); err != nil {
+		return SessionSnapshot{}, err
+	}
 	if cfg.TimeoutSec <= 0 {
 		cfg.TimeoutSec = 10
 	}
@@ -667,12 +694,142 @@ func dialThroughJump(ctx context.Context, client *ssh.Client, address string, ti
 	}
 }
 
+func socks5Address(host string, port int) ([]byte, error) {
+	request := []byte{0x05, 0x01, 0x00}
+	if ip := net.ParseIP(host); ip != nil {
+		if ipv4 := ip.To4(); ipv4 != nil {
+			request = append(request, 0x01)
+			request = append(request, ipv4...)
+		} else if ipv6 := ip.To16(); ipv6 != nil {
+			request = append(request, 0x04)
+			request = append(request, ipv6...)
+		} else {
+			return nil, fmt.Errorf("invalid target IP %q", host)
+		}
+	} else {
+		if len(host) == 0 || len(host) > 255 {
+			return nil, fmt.Errorf("SOCKS5 target hostname length is invalid")
+		}
+		request = append(request, 0x03, byte(len(host)))
+		request = append(request, []byte(host)...)
+	}
+	request = append(request, byte(port>>8), byte(port))
+	return request, nil
+}
+
+func socks5ReplyMessage(code byte) string {
+	switch code {
+	case 0x01:
+		return "general SOCKS server failure"
+	case 0x02:
+		return "connection not allowed by ruleset"
+	case 0x03:
+		return "network unreachable"
+	case 0x04:
+		return "host unreachable"
+	case 0x05:
+		return "connection refused"
+	case 0x06:
+		return "TTL expired"
+	case 0x07:
+		return "command not supported"
+	case 0x08:
+		return "address type not supported"
+	default:
+		return fmt.Sprintf("unknown SOCKS5 reply 0x%02x", code)
+	}
+}
+
+func socks5Connect(conn net.Conn, host string, port int, timeout time.Duration) error {
+	if timeout > 0 {
+		if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+			return err
+		}
+		defer conn.SetDeadline(time.Time{})
+	}
+
+	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+		return err
+	}
+	methodReply := make([]byte, 2)
+	if _, err := io.ReadFull(conn, methodReply); err != nil {
+		return err
+	}
+	if methodReply[0] != 0x05 {
+		return fmt.Errorf("unexpected SOCKS version 0x%02x", methodReply[0])
+	}
+	if methodReply[1] != 0x00 {
+		if methodReply[1] == 0xff {
+			return errors.New("SOCKS5 proxy rejected NO AUTH authentication")
+		}
+		return fmt.Errorf("SOCKS5 proxy selected unsupported authentication method 0x%02x", methodReply[1])
+	}
+
+	request, err := socks5Address(host, port)
+	if err != nil {
+		return err
+	}
+	if _, err := conn.Write(request); err != nil {
+		return err
+	}
+
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return err
+	}
+	if header[0] != 0x05 {
+		return fmt.Errorf("unexpected SOCKS version 0x%02x", header[0])
+	}
+	if header[1] != 0x00 {
+		return fmt.Errorf("SOCKS5 CONNECT failed: %s", socks5ReplyMessage(header[1]))
+	}
+
+	var addressLen int
+	switch header[3] {
+	case 0x01:
+		addressLen = 4
+	case 0x04:
+		addressLen = 16
+	case 0x03:
+		length := []byte{0}
+		if _, err := io.ReadFull(conn, length); err != nil {
+			return err
+		}
+		addressLen = int(length[0])
+	default:
+		return fmt.Errorf("unsupported SOCKS5 bind address type 0x%02x", header[3])
+	}
+	if addressLen > 0 {
+		discard := make([]byte, addressLen+2)
+		if _, err := io.ReadFull(conn, discard); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (m *Manager) openTargetConn(ms *managedSession, cfg ConnectConfig, targetAddress string) (net.Conn, func(), error) {
-	if cfg.Jump == nil {
+	if cfg.Jump == nil && cfg.SOCKS5 == nil {
 		m.setState(ms, "connecting", "tcp_connect", "正在连接 "+targetAddress, "", "")
 		raw, err := dialTCPContext(ms.ctx, cfg.Host, cfg.Port, cfg.TimeoutSec, cfg.KeepaliveSec)
 		if err != nil {
 			return nil, func() {}, &runtimeError{Code: networkCode(err), Stage: "tcp_connect", Retryable: true, Err: err}
+		}
+		return raw, func() {}, nil
+	}
+
+	if cfg.SOCKS5 != nil {
+		proxy := *cfg.SOCKS5
+		proxyAddress := net.JoinHostPort(proxy.Host, fmt.Sprintf("%d", proxy.Port))
+		m.setState(ms, "connecting", "socks5_connect", "正在连接 SOCKS5 "+proxyAddress, "", "")
+		raw, err := dialTCPContext(ms.ctx, proxy.Host, proxy.Port, cfg.TimeoutSec, cfg.KeepaliveSec)
+		if err != nil {
+			return nil, func() {}, &runtimeError{Code: "SOCKS5_CONNECT_FAILED", Stage: "socks5_connect", Retryable: true, Err: err}
+		}
+		m.setState(ms, "connecting", "socks5_handshake", "正在通过 SOCKS5 连接目标 "+targetAddress, "", "")
+		if err := socks5Connect(raw, cfg.Host, cfg.Port, time.Duration(cfg.TimeoutSec)*time.Second); err != nil {
+			_ = raw.Close()
+			return nil, func() {}, &runtimeError{Code: "SOCKS5_NEGOTIATION_FAILED", Stage: "socks5_handshake", Retryable: true, Err: err}
 		}
 		return raw, func() {}, nil
 	}
@@ -1161,6 +1318,10 @@ func userMessage(err *runtimeError) string {
 		return "通过 Jump Host 连接目标超时"
 	case "JUMP_HOST_TARGET_DIAL_FAILED":
 		return "Jump Host 无法连接目标主机"
+	case "SOCKS5_CONNECT_FAILED":
+		return "无法连接 SOCKS5 代理"
+	case "SOCKS5_NEGOTIATION_FAILED":
+		return "SOCKS5 代理协商或目标连接失败"
 	case "HOST_KEY_CHANGED":
 		return "主机身份已变化，连接已阻止"
 	case "HOST_KEY_REJECTED":

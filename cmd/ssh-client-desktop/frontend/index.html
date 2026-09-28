@@ -303,12 +303,19 @@
         <select id="profileNetworkMode">
           <option value="direct">Direct</option>
           <option value="jump_host">Jump Host / ProxyJump</option>
-          <option value="socks5" disabled>SOCKS5（下一批）</option>
+          <option value="socks5">SOCKS5</option>
         </select>
       </label>
       <label id="profileJumpHostField" class="dk-field is-hidden">Jump Host
         <select id="profileJumpHost"></select>
       </label>
+      <div id="profileSOCKS5Field" class="dk-field is-span-2 is-hidden">
+        <label>SOCKS5 代理</label>
+        <div class="field-with-action network-proxy-fields">
+          <input id="profileSOCKS5Host" autocomplete="off" placeholder="127.0.0.1">
+          <input id="profileSOCKS5Port" type="number" min="1" max="65535" value="1080" aria-label="SOCKS5 端口">
+        </div>
+      </div>
       <label class="dk-field">连接超时（秒）
         <input id="profileTimeoutSec" type="number" min="1" max="300" value="10">
       </label>

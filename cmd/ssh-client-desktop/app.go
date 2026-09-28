@@ -965,7 +965,11 @@ func (a *App) storedProfileConnectConfig(settings model.Settings, profile model.
 		}
 		return cfg, nil
 	case "socks5":
-		return sshclient.ConnectConfig{}, errors.New("SOCKS5 Runtime 将在下一批接入")
+		cfg.SOCKS5 = &sshclient.SOCKS5Config{
+			Host: profile.Network.SOCKS5Host,
+			Port: profile.Network.SOCKS5Port,
+		}
+		return cfg, nil
 	default:
 		return sshclient.ConnectConfig{}, fmt.Errorf("不支持的网络模式 %q", profile.Network.Mode)
 	}

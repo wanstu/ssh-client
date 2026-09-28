@@ -3501,11 +3501,12 @@ function refreshJumpProfileOptions(selectedId = "", currentProfileId = "") {
 function updateProfileNetworkFields() {
   const mode = $("#profileNetworkMode").value;
   $("#profileJumpHostField").classList.toggle("is-hidden", mode !== "jump_host");
+  $("#profileSOCKS5Field").classList.toggle("is-hidden", mode !== "socks5");
   const note = $("#profileNetworkNote");
   if (mode === "jump_host") {
     note.textContent = "只支持单层 Jump Host。Jump Profile 本身必须是 Direct；Password 认证需先在 Jump Profile 中保存密码。";
   } else if (mode === "socks5") {
-    note.textContent = "SOCKS5 Runtime 尚未接入，本批只开放 Direct 与 Jump Host。";
+    note.textContent = "通过 SOCKS5 CONNECT 建立目标 TCP 通道。当前支持 NO AUTH SOCKS5，不保存或发送代理用户名密码。";
   } else {
     note.textContent = "Direct：客户端直接连接目标 SSH 主机。";
   }
@@ -3526,6 +3527,8 @@ function openProfileDialog(profile = null) {
   $("#profileNetworkMode").value = network.mode;
   $("#profileTimeoutSec").value = network.timeout_sec;
   $("#profileKeepaliveSec").value = network.keepalive_sec;
+  $("#profileSOCKS5Host").value = network.socks5_host || "";
+  $("#profileSOCKS5Port").value = network.socks5_port || 1080;
   const terminal = { ...DEFAULT_TERMINAL_CONFIG, ...((editing && profile.terminal) || {}) };
   $("#profileTerminalTerm").value = terminal.term;
   $("#profileTerminalEncoding").value = terminal.encoding;
@@ -3703,8 +3706,8 @@ function profileFromForm() {
     network: {
       mode: $("#profileNetworkMode").value,
       jump_profile_id: $("#profileNetworkMode").value === "jump_host" ? $("#profileJumpHost").value : "",
-      socks5_host: existing && existing.network ? existing.network.socks5_host || "" : "",
-      socks5_port: existing && existing.network ? existing.network.socks5_port || 0 : 0,
+      socks5_host: $("#profileNetworkMode").value === "socks5" ? $("#profileSOCKS5Host").value.trim() : "",
+      socks5_port: $("#profileNetworkMode").value === "socks5" ? Number($("#profileSOCKS5Port").value || 1080) : 0,
       timeout_sec: Number($("#profileTimeoutSec").value || 10),
       keepalive_sec: Number($("#profileKeepaliveSec").value || 0)
     },
@@ -3728,6 +3731,11 @@ async function saveProfile() {
   errorBox.classList.add("is-hidden");
   if (profile.network.mode === "jump_host" && !profile.network.jump_profile_id) {
     errorBox.textContent = "请选择一个 Direct Connection Profile 作为 Jump Host";
+    errorBox.classList.remove("is-hidden");
+    return;
+  }
+  if (profile.network.mode === "socks5" && !profile.network.socks5_host) {
+    errorBox.textContent = "请输入 SOCKS5 代理地址";
     errorBox.classList.remove("is-hidden");
     return;
   }

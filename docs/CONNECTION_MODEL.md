@@ -102,6 +102,11 @@ Jump Password 从 Jump Profile 自己的安全凭据引用读取，不复制进�
 
 多级 ProxyJump 后续扩展；Settings 当前拒绝 Jump Profile 再引用另一层 Jump Host。
 
+### SOCKS5
+
+`network.mode = socks5` 时使用 Profile 自己的 `socks5_host / socks5_port`。Desktop 直接暴露这两个字段；Runtime 通过 SOCKS5 CONNECT 建立目标 TCP 通道后，继续复用与 Direct 完全相同的目标 SSH Host Key、认证和终端流程。
+
+当前只支持 SOCKS5 NO AUTH（method `0x00`），不保存代理账号密码。目标为域名时保留 DOMAINNAME 形式交给代理解析。Jump Host 与 SOCKS5 是互斥的单一网络入口，不能同时配置。
 ## 7. TerminalConfig
 
 ```text

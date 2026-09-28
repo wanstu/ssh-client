@@ -15,6 +15,11 @@ type Credentials struct {
 	Passphrase string `json:"passphrase,omitempty"`
 }
 
+type SOCKS5Config struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
+}
+
 type JumpConfig struct {
 	ProfileID    string           `json:"profile_id,omitempty"`
 	Name         string           `json:"name"`
@@ -40,6 +45,7 @@ type ConnectConfig struct {
 	KeepaliveSec int                   `json:"keepalive_sec"`
 	Credentials  Credentials           `json:"credentials"`
 	Jump         *JumpConfig           `json:"jump,omitempty"`
+	SOCKS5       *SOCKS5Config         `json:"socks5,omitempty"`
 }
 
 type SessionSnapshot struct {

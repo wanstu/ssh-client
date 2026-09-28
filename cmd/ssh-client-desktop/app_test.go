@@ -322,6 +322,36 @@ func TestStoredProfileConnectConfigResolvesJumpHostCredentials(t *testing.T) {
 	}
 }
 
+func TestStoredProfileConnectConfigSOCKS5(t *testing.T) {
+	app, target := newCredentialTestApp(t)
+	target.Network.Mode = "socks5"
+	target.Network.SOCKS5Host = "127.0.0.1"
+	target.Network.SOCKS5Port = 1080
+
+	settings := model.DefaultSettings()
+	settings.Profiles = []model.ConnectionProfile{target}
+	if err := settings.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := app.storedProfileConnectConfig(settings, target, sshclient.Credentials{Password: "target-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SOCKS5 == nil {
+		t.Fatal("SOCKS5 config was not resolved")
+	}
+	if cfg.SOCKS5.Host != "127.0.0.1" || cfg.SOCKS5.Port != 1080 {
+		t.Fatalf("unexpected SOCKS5 config: %#v", cfg.SOCKS5)
+	}
+	if cfg.Jump != nil {
+		t.Fatalf("unexpected jump config with SOCKS5: %#v", cfg.Jump)
+	}
+	if cfg.Credentials.Password != "target-secret" {
+		t.Fatalf("target credentials changed: %#v", cfg.Credentials)
+	}
+}
+
 func TestBatchProfileOperations(t *testing.T) {
 	app, profileA := newCredentialTestApp(t)
 	profileA.Tags = []string{"ops"}
