@@ -3,5 +3,11 @@
   "name": "ssh-client",
   "outputfilename": "ssh-client",
   "frontend:dir": "frontend",
-  "wailsjsdir": "frontend"
+  "wailsjsdir": "frontend",
+  "info": {
+    "companyName": "wanstu",
+    "productName": "SSH Client",
+    "productVersion": "0.0.0",
+    "comments": "Cross-platform SSH desktop client"
+  }
 }

@@ -3,6 +3,7 @@ cmd/ssh-client-desktop/build/bin/
 cmd/ssh-client-desktop/build/appicon.png
 cmd/ssh-client-desktop/build/windows/icon.ico
 cmd/ssh-client-desktop/frontend/wailsjs/
+cmd/ssh-client-desktop/frontend/desktopkit-build-info.json
 dist/
 
 # Go
