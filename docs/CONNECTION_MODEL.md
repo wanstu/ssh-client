@@ -210,6 +210,8 @@ source_ref?
 - `Parse(content, sourcePath)` 保持纯解析，不读取 Include 指向的磁盘文件
 - Match / ProxyCommand 仍保持保守处理：Match 不导入，ProxyCommand 不自动转换
 - 不自动双向同步
-- 后续可增加 Re-import Preview
+- 重复 Import 是幂等的：同一 `ssh_config` source alias 已存在时跳过，不覆盖应用内已经编辑过的 Profile；普通同名或异来源同名仍视为冲突
+- `source.ref` 保留原始 SSH Config alias，因此目标 Host 的 ProxyJump 可以继续引用已经导入、后来在应用中改名的 Jump Profile
+- 后续可增加 Re-import Preview / 显式差异更新；在此之前绝不自动把 SSH Config 的变化覆盖到本地 Profile
 
 这是刻意的产品边界。

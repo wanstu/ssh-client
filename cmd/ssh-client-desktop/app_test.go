@@ -11,6 +11,7 @@ import (
 	"github.com/wanstu/ssh-client/internal/config"
 	"github.com/wanstu/ssh-client/internal/model"
 	"github.com/wanstu/ssh-client/internal/sshclient"
+	"github.com/wanstu/ssh-client/internal/sshconfig"
 	kitautostart "github.com/wanstu/wails-desktop-kit/autostart"
 	"github.com/wanstu/wails-desktop-kit/secureconfig"
 )
@@ -349,6 +350,76 @@ func TestStoredProfileConnectConfigSOCKS5(t *testing.T) {
 	}
 	if cfg.Credentials.Password != "target-secret" {
 		t.Fatalf("target credentials changed: %#v", cfg.Credentials)
+	}
+}
+
+func TestImportSSHConfigIsIdempotentAndReusesExistingJump(t *testing.T) {
+	app, _ := newCredentialTestApp(t)
+
+	jump := model.DefaultProfile()
+	jump.ID = "profile_jump_existing"
+	jump.Name = "我的跳板机"
+	jump.Host = "10.0.0.10"
+	jump.Username = "jump-user"
+	jump.Source = model.SourceInfo{Kind: "ssh_config", Ref: "C:/ssh/conf.d/jump.conf#jump"}
+
+	settings := model.DefaultSettings()
+	settings.Profiles = []model.ConnectionProfile{jump}
+	if err := app.store.Save(settings); err != nil {
+		t.Fatal(err)
+	}
+
+	entries := []sshconfig.Entry{
+		{
+			Alias: "jump", HostName: "10.0.0.99", User: "ignored", Port: 22,
+			SourcePath: "C:/ssh/conf.d/jump.conf", Supported: true,
+		},
+		{
+			Alias: "target", HostName: "10.0.0.20", User: "deploy", Port: 2222,
+			ProxyJump: "jump", SourcePath: "C:/ssh/conf.d/target.conf", Supported: true,
+		},
+	}
+
+	first, err := app.ImportSSHConfig(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Settings.Profiles) != 2 {
+		t.Fatalf("profile count after first import = %d", len(first.Settings.Profiles))
+	}
+	if first.Settings.Profiles[0].Name != "我的跳板机" || first.Settings.Profiles[0].Host != "10.0.0.10" {
+		t.Fatalf("existing imported profile was overwritten: %#v", first.Settings.Profiles[0])
+	}
+	target := first.Settings.Profiles[1]
+	if target.Name != "target" || target.Network.Mode != "jump_host" || target.Network.JumpProfileID != jump.ID {
+		t.Fatalf("target did not reuse existing jump profile: %#v", target)
+	}
+
+	second, err := app.ImportSSHConfig(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Settings.Profiles) != 2 {
+		t.Fatalf("idempotent import created duplicates: %#v", second.Settings.Profiles)
+	}
+}
+
+func TestImportSSHConfigRejectsManualNameConflict(t *testing.T) {
+	app, profile := newCredentialTestApp(t)
+	profile.Name = "target"
+	profile.Source = model.SourceInfo{Kind: "manual"}
+	settings := model.DefaultSettings()
+	settings.Profiles = []model.ConnectionProfile{profile}
+	if err := app.store.Save(settings); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := app.ImportSSHConfig([]sshconfig.Entry{{
+		Alias: "target", HostName: "10.0.0.20", User: "deploy", Port: 22,
+		SourcePath: "C:/ssh/config", Supported: true,
+	}})
+	if err == nil {
+		t.Fatal("expected manual name conflict")
 	}
 }
 

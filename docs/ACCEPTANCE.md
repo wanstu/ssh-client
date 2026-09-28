@@ -86,7 +86,10 @@
 - 纯字符串 `Parse()` 不访问磁盘；其中出现 Include 仍只给“未自动展开” warning。只有用户明确选择文件走 `PreviewFile()` 时才读取 Include。
 - `Match` 块仍不导入并给 warning；`ProxyCommand` 仍标记为不可安全转换，不因 Include 支持而放宽。
 - 非交互 Host 可跳过。
-- 重复导入必须有冲突策略，不静默覆盖。
+- 重复导入必须有冲突策略，不静默覆盖：同一 SSH Config 来源 / alias 再次导入时视为“已存在”，默认不勾选且后端幂等跳过，不覆盖用户已经编辑过的 Profile；手工连接或不同来源占用同名 alias 时标记“名称冲突”并禁止导入。
+- 同一预览里重复出现相同 alias 时，只允许第一条作为新增候选，其余标记“预览重复”并跳过。
+- 新增目标的 ProxyJump 可以解析到已经存在的 SSH Config Profile，即使该 Profile 在应用里已经被用户重命名；解析依据保留在 `source.ref` 中的原始 alias。
+- 导入预览底部显示“将导入 / 已存在 / 冲突 / 预览重复 / 不支持”数量；成功提示使用实际新增 Profile 数量，不用用户选择数冒充新增数。
 
 ## 7. Direct SSH
 

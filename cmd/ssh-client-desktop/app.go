@@ -1191,7 +1191,7 @@ func (a *App) ImportSSHConfig(entries []sshconfig.Entry) (UIState, error) {
 		}
 
 		newProfiles := make([]model.ConnectionProfile, 0, len(entries))
-		aliasToID := make(map[string]string, len(entries))
+		newEntries := make([]sshconfig.Entry, 0, len(entries))
 		for _, entry := range entries {
 			if !entry.Supported {
 				return fmt.Errorf("Host %q 不能安全导入: %s", entry.Alias, entry.Warning)
@@ -1201,12 +1201,15 @@ func (a *App) ImportSSHConfig(entries []sshconfig.Entry) (UIState, error) {
 				return errors.New("SSH Config Host alias 不能为空")
 			}
 			key := strings.ToLower(name)
+			if existingID, exists := existingSSHConfigProfileID(settings, entry); exists {
+				profileRefs[key] = existingID
+				continue
+			}
 			if _, exists := names[key]; exists {
-				return fmt.Errorf("连接名称 %q 已存在；导入不会静默覆盖", name)
+				return fmt.Errorf("连接名称 %q 已存在；它不是同一 SSH Config 来源，导入不会覆盖", name)
 			}
 			names[key] = struct{}{}
 			id := a.store.NewID("profile")
-			aliasToID[key] = id
 			profileRefs[key] = id
 
 			profile := model.DefaultProfile()
@@ -1233,9 +1236,10 @@ func (a *App) ImportSSHConfig(entries []sshconfig.Entry) (UIState, error) {
 				Ref:  entry.SourcePath + "#" + name,
 			}
 			newProfiles = append(newProfiles, profile)
+			newEntries = append(newEntries, entry)
 		}
 
-		for i, entry := range entries {
+		for i, entry := range newEntries {
 			jump := proxyJumpAlias(entry.ProxyJump)
 			if jump == "" {
 				continue
@@ -1275,6 +1279,30 @@ func currentUsername() string {
 		}
 	}
 	return "user"
+}
+
+func existingSSHConfigProfileID(settings *model.Settings, entry sshconfig.Entry) (string, bool) {
+	alias := strings.TrimSpace(entry.Alias)
+	ref := entry.SourcePath + "#" + alias
+
+	for _, profile := range settings.Profiles {
+		if profile.Source.Kind != "ssh_config" {
+			continue
+		}
+		if profile.Source.Ref == ref {
+			return profile.ID, true
+		}
+	}
+
+	for _, profile := range settings.Profiles {
+		if profile.Source.Kind != "ssh_config" {
+			continue
+		}
+		if strings.EqualFold(sourceAlias(profile.Source.Ref), alias) {
+			return profile.ID, true
+		}
+	}
+	return "", false
 }
 
 func sourceAlias(ref string) string {

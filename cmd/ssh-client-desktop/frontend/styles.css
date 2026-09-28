@@ -1608,6 +1608,37 @@ button, input, select {
   opacity: .62;
 }
 
+.import-entry.is-existing {
+  border-color: color-mix(in srgb, var(--dk-success) 24%, var(--dk-border));
+  background: color-mix(in srgb, var(--dk-success-bg) 48%, var(--dk-bg-app));
+}
+
+.import-entry.is-conflict {
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--dk-danger) 42%, var(--dk-border));
+  background: color-mix(in srgb, var(--dk-danger-bg) 58%, var(--dk-bg-app));
+}
+
+.import-entry.is-duplicate {
+  background: var(--dk-bg-subtle);
+}
+
+.import-status-new {
+  color: var(--dk-success);
+}
+
+.import-status-existing {
+  color: var(--dk-success);
+}
+
+.import-status-conflict {
+  color: var(--dk-danger);
+}
+
+.import-status-duplicate {
+  color: var(--dk-text-secondary);
+}
+
 .import-entry-main {
   min-width: 0;
 }

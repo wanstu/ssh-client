@@ -3874,6 +3874,61 @@ async function previewSSHConfig() {
   }
 }
 
+function sshConfigSourceAlias(ref) {
+  const value = String(ref || "");
+  const index = value.lastIndexOf("#");
+  return index >= 0 ? value.slice(index + 1).trim() : "";
+}
+
+function classifyImportEntry(entry, index = -1) {
+  if (!entry || !entry.supported) {
+    return { kind: "unsupported", label: (entry && entry.warning) || "不支持" };
+  }
+
+  const alias = String(entry.alias || "").trim();
+  const aliasKey = alias.toLowerCase();
+  const sourceRef = String(entry.source_path || "") + "#" + alias;
+  const profiles = (state.settings && state.settings.profiles) || [];
+
+  const exact = profiles.find((profile) =>
+    profile.source && profile.source.kind === "ssh_config" && profile.source.ref === sourceRef
+  );
+  if (exact) {
+    return { kind: "existing", label: "已存在 · 跳过", profile: exact };
+  }
+
+  const importedAlias = profiles.find((profile) =>
+    profile.source && profile.source.kind === "ssh_config" &&
+    sshConfigSourceAlias(profile.source.ref).toLowerCase() === aliasKey
+  );
+  if (importedAlias) {
+    return { kind: "existing", label: "已存在 · 跳过", profile: importedAlias };
+  }
+
+  const nameConflict = profiles.find((profile) =>
+    String(profile.name || "").trim().toLowerCase() === aliasKey
+  );
+  if (nameConflict) {
+    return { kind: "conflict", label: "名称冲突 · 不覆盖", profile: nameConflict };
+  }
+
+  if (index >= 0 && state.importPreview && Array.isArray(state.importPreview.entries)) {
+    const earlier = state.importPreview.entries.findIndex((candidate, candidateIndex) =>
+      candidateIndex < index &&
+      candidate && candidate.supported &&
+      String(candidate.alias || "").trim().toLowerCase() === aliasKey
+    );
+    if (earlier >= 0) {
+      return { kind: "duplicate", label: "预览重复 · 跳过" };
+    }
+  }
+
+  return {
+    kind: "new",
+    label: entry.proxy_jump ? "新增 · Jump Host 引用" : "新增"
+  };
+}
+
 function renderImportPreview() {
   const container = $("#importEntries");
   const warnings = $("#importWarnings");
@@ -3907,14 +3962,20 @@ function renderImportPreview() {
   }
 
   preview.entries.forEach((entry, index) => {
+    const classification = classifyImportEntry(entry, index);
+    const selectable = classification.kind === "new";
     const row = document.createElement("label");
-    row.className = "import-entry" + (entry.supported ? "" : " is-disabled");
+    row.className = "import-entry"
+      + (selectable ? "" : " is-disabled")
+      + (classification.kind === "existing" ? " is-existing" : "")
+      + (classification.kind === "conflict" ? " is-conflict" : "")
+      + (classification.kind === "duplicate" ? " is-duplicate" : "");
 
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.dataset.importIndex = String(index);
-    checkbox.checked = !!entry.supported;
-    checkbox.disabled = !entry.supported;
+    checkbox.checked = selectable;
+    checkbox.disabled = !selectable;
     checkbox.addEventListener("change", updateImportSelectionSummary);
 
     const main = document.createElement("span");
@@ -3930,8 +3991,11 @@ function renderImportPreview() {
     main.append(title, detail);
 
     const note = document.createElement("span");
-    note.className = "import-entry-note";
-    note.textContent = entry.supported ? (entry.proxy_jump ? "Jump Host 引用" : "可导入") : (entry.warning || "不支持");
+    note.className = "import-entry-note import-status-" + classification.kind;
+    note.textContent = classification.label;
+    if (classification.profile) {
+      note.title = "现有连接：" + classification.profile.name;
+    }
 
     row.append(checkbox, main, note);
     container.append(row);
@@ -3945,15 +4009,27 @@ function selectedImportEntries() {
   document.querySelectorAll("[data-import-index]:checked").forEach((checkbox) => {
     const index = Number(checkbox.dataset.importIndex);
     const entry = state.importPreview.entries[index];
-    if (entry && entry.supported) selected.push(entry);
+    if (entry && classifyImportEntry(entry, index).kind === "new") selected.push(entry);
   });
   return selected;
 }
 
 function updateImportSelectionSummary() {
-  const count = selectedImportEntries().length;
-  $("#importSelectionSummary").textContent = count + " 个已选";
-  $("#confirmImportButton").disabled = count === 0;
+  const selectedCount = selectedImportEntries().length;
+  const counts = { existing: 0, conflict: 0, duplicate: 0, unsupported: 0 };
+  if (state.importPreview && Array.isArray(state.importPreview.entries)) {
+    state.importPreview.entries.forEach((entry, index) => {
+      const kind = classifyImportEntry(entry, index).kind;
+      if (Object.prototype.hasOwnProperty.call(counts, kind)) counts[kind]++;
+    });
+  }
+  const parts = [selectedCount + " 个将导入"];
+  if (counts.existing) parts.push(counts.existing + " 个已存在");
+  if (counts.conflict) parts.push(counts.conflict + " 个冲突");
+  if (counts.duplicate) parts.push(counts.duplicate + " 个预览重复");
+  if (counts.unsupported) parts.push(counts.unsupported + " 个不支持");
+  $("#importSelectionSummary").textContent = parts.join(" · ");
+  $("#confirmImportButton").disabled = selectedCount === 0;
 }
 
 async function importSelectedSSHConfig() {
@@ -3962,11 +4038,13 @@ async function importSelectedSSHConfig() {
   const errorBox = $("#importError");
   errorBox.classList.add("is-hidden");
   try {
+    const beforeCount = (state.settings.profiles || []).length;
     const next = await ImportSSHConfig(entries);
+    const importedCount = Math.max(0, (next.settings.profiles || []).length - beforeCount);
     state.settings = next.settings;
     $("#importDialog").close();
     renderSidebar();
-    showToast("已导入 " + entries.length + " 个 SSH 连接");
+    showToast(importedCount ? "已导入 " + importedCount + " 个 SSH 连接" : "没有新增连接；已存在条目已跳过");
   } catch (error) {
     errorBox.textContent = String(error);
     errorBox.classList.remove("is-hidden");
